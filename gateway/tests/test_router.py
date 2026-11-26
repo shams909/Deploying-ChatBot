@@ -155,16 +155,28 @@ def test_dynamic_sampling_coding_and_diagram_prompts(monkeypatch):
 
 def test_dynamic_sampling_casual_and_grounded_prompts(monkeypatch):
     monkeypatch.setattr(settings, "enable_semantic_embedder", False)
-    casual = route_request(
+    for text in ("hey", "hug me"):
+        casual = route_request(
+            requested_model="labai-auto",
+            messages=[{"role": "user", "content": text}],
+            explicit_max_tokens=None,
+            node2_healthy=True,
+            node2_queue_depth=0,
+        )
+        temp, penalty = resolve_sampling_params(0.7, None, casual, is_grounded=False)
+        assert temp == 0.82
+        assert penalty == 0.25
+
+    factual = route_request(
         requested_model="labai-auto",
-        messages=[{"role": "user", "content": "hey"}],
+        messages=[{"role": "user", "content": "What is DNS?"}],
         explicit_max_tokens=None,
         node2_healthy=True,
         node2_queue_depth=0,
     )
-    temp, penalty = resolve_sampling_params(0.7, None, casual, is_grounded=False)
-    assert temp == 0.78
-    assert penalty == 0.15
+    f_temp, f_penalty = resolve_sampling_params(0.7, None, factual, is_grounded=False)
+    assert f_temp == 0.55
+    assert f_penalty == 0.05
 
     # Grounded web/URL requests clamp back down for factual adherence
     grounded_temp, grounded_penalty = resolve_sampling_params(0.8, None, casual, is_grounded=True)

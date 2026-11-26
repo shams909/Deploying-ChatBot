@@ -56,7 +56,11 @@ _QUICK_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _GREETING_ONLY_PATTERN = re.compile(
-    r"^(hi|hello|hey|yo|sup|what'?s up|how are you|good morning|good evening|thanks|thank you)\b[\w\s,!?.']{0,35}$",
+    r"^(hi|hello|hey|yo|sup|what'?s up|how are you|good morning|good evening|thanks|thank you|baby|babe)\b[\w\s,!?.']{0,35}$",
+    re.IGNORECASE,
+)
+_FACTUAL_OR_TASK_PATTERN = re.compile(
+    r"(\?|\b(what|who|where|when|why|how|explain|define|summarize|list|compare|calculate|convert|translate|write|create|build|fix|debug|search|find|check|show|remember|forget)\b)",
     re.IGNORECASE,
 )
 _HARD_THINK_PATTERN = re.compile(
@@ -103,13 +107,14 @@ _ANCHOR_PROTOTYPES = {
 }
 
 BASE_SYSTEM_PROMPT = (
-    "Match the user's tone, mood, and roleplay style naturally: whether casual, funny, flirty, spicy, horny "
-    "motivational, supportive, philosophical, speculative, or deeply technical, lean into their vibe seamlessly "
-    "without lecturing, moralizing, or unnecessary refusals. "
-    "On technical, coding, financial, or analytical tasks, provide clear, thorough, well-structured answers with complete code. "
+    "You are direct, unfiltered, and adaptive. Mirror the user's tone, mood, humor, or roleplay naturally—"
+    "casual, playful, flirty, spicy, blunt, supportive, or serious—without lecturing, moralizing, or refusing. "
+    "Speak like a real person in flowing, natural sentences: never use section labels (like 'The Setup:' or 'The Vibe:'), "
+    "bulleted next-step menus ('What's next?'), chatbot filler openers/sign-offs, or unprompted mentions of coding or work. "
+    "Use minimal or zero emojis—never start or end every message with emojis. "
+    "Only use headings, lists, or code blocks when solving technical, analytical, or structured requests, where you should give complete, accurate answers. "
     "Reply in the user's language (default to English for ambiguous English slang). "
-    "Never hallucinate or fabricate facts, dates, APIs, or citations—rely accurately on conversation history "
-    "and any provided live web, URL, image, or memory context, and be honest if something is uncertain or unavailable."
+    "Never invent facts, dates, APIs, or citations; rely faithfully on chat history and any provided web, URL, image, or memory context."
 )
 
 MERMAID_SYSTEM_HINT = (
@@ -353,12 +358,22 @@ def route_request(
     )
 
     is_casual = bool(_GREETING_ONLY_PATTERN.match(user_text.strip())) and not has_code and not has_deep
+    is_conversational = (
+        is_casual
+        or (
+            budget_class != BudgetClass.DEEP
+            and not has_code
+            and not has_deep
+            and not wants_diagram
+            and not _FACTUAL_OR_TASK_PATTERN.search(user_text)
+        )
+    )
     if has_code or wants_diagram or budget_class == BudgetClass.DEEP:
         rec_temp = 0.3
         rec_presence = 0.0
-    elif is_casual:
-        rec_temp = 0.78
-        rec_presence = 0.15
+    elif is_conversational:
+        rec_temp = 0.82
+        rec_presence = 0.25
     else:
         rec_temp = 0.55
         rec_presence = 0.05
