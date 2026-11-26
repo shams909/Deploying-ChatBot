@@ -18,12 +18,13 @@ if [[ "${1:-}" == "--worker-exec" ]]; then
   # Executed remotely on node02
   mkdir -p "$MODEL_DIR"
   python3 - <<'PY'
-import json, urllib.request, subprocess
+import json, os, subprocess, urllib.request
 
 repo = "mradermacher/Huihui-Qwen3.5-9B-abliterated-GGUF"
 with urllib.request.urlopen(f"https://huggingface.co/api/models/{repo}/tree/main", timeout=20) as r:
-    files = [item["path"] for item in json.load(r) if item.get("type") == "file"]
+    entries = {item["path"]: item.get("size", 0) for item in json.load(r) if item.get("type") == "file"}
 
+files = list(entries.keys())
 model_file = next((f for f in files if f.endswith(".Q4_K_M.gguf") and "mmproj" not in f.lower()), None)
 mmproj_file = next(
     (f for f in files if "mmproj" in f.lower() and f.lower().endswith("q8_0.gguf")),
@@ -33,8 +34,12 @@ if not model_file or not mmproj_file:
     raise SystemExit(f"Could not find Q4_K_M + mmproj in {repo}: {files}")
 
 for fname, dest in [(model_file, "/opt/labai/models/tier3-pro.gguf"), (mmproj_file, "/opt/labai/models/tier3-mmproj.gguf")]:
+    expected = entries.get(fname, 0)
+    if os.path.exists(dest) and expected and os.path.getsize(dest) == expected:
+        print(f"==> [node02] Already complete, skipping: {fname}")
+        continue
     url = f"https://huggingface.co/{repo}/resolve/main/{fname}"
-    print(f"==> [node02] Downloading {fname} -> {dest}")
+    print(f"==> [node02] Downloading/resuming {fname} -> {dest}")
     subprocess.run(["curl", "-fL", "--retry", "5", "--retry-delay", "5", "-C", "-", "-o", dest, url], check=True)
 PY
   echo "==> [node02] Stopping llama-tier3 and deleting old Qwen3-*.gguf models..."
@@ -64,17 +69,24 @@ ssh -t "${WORKER_USER}@${WORKER_IP}" "bash ${REMOTE_DIR}/scripts/migrate_to_qwen
 echo "==> [3/4] Downloading Qwen3.5-2B & 4B-abliterated (+ mmproj) on node01..."
 mkdir -p "$MODEL_DIR"
 python3 - <<'PY'
-import json, urllib.request, subprocess
+import json, os, subprocess, urllib.request
+
+def download_if_needed(repo, fname, expected, dest):
+    if os.path.exists(dest) and expected and os.path.getsize(dest) == expected:
+        print(f"==> [node01] Already complete, skipping: {fname}")
+        return
+    url = f"https://huggingface.co/{repo}/resolve/main/{fname}"
+    print(f"==> [node01] Downloading/resuming {fname} -> {dest}")
+    subprocess.run(["curl", "-fL", "--retry", "5", "--retry-delay", "5", "-C", "-", "-o", dest, url], check=True)
 
 def resolve_and_pull(repo, dest_model, dest_mmproj=None):
     with urllib.request.urlopen(f"https://huggingface.co/api/models/{repo}/tree/main", timeout=20) as r:
-        files = [item["path"] for item in json.load(r) if item.get("type") == "file"]
+        entries = {item["path"]: item.get("size", 0) for item in json.load(r) if item.get("type") == "file"}
+    files = list(entries.keys())
     model_file = next((f for f in files if f.endswith(".Q4_K_M.gguf") and "mmproj" not in f.lower()), None)
     if not model_file:
         raise SystemExit(f"Could not find Q4_K_M in {repo}: {files}")
-    url = f"https://huggingface.co/{repo}/resolve/main/{model_file}"
-    print(f"==> [node01] Downloading {model_file} -> {dest_model}")
-    subprocess.run(["curl", "-fL", "--retry", "5", "--retry-delay", "5", "-C", "-", "-o", dest_model, url], check=True)
+    download_if_needed(repo, model_file, entries.get(model_file, 0), dest_model)
     if dest_mmproj:
         mmproj_file = next(
             (f for f in files if "mmproj" in f.lower() and f.lower().endswith("q8_0.gguf")),
@@ -82,9 +94,7 @@ def resolve_and_pull(repo, dest_model, dest_mmproj=None):
         )
         if not mmproj_file:
             raise SystemExit(f"Could not find mmproj in {repo}: {files}")
-        murl = f"https://huggingface.co/{repo}/resolve/main/{mmproj_file}"
-        print(f"==> [node01] Downloading {mmproj_file} -> {dest_mmproj}")
-        subprocess.run(["curl", "-fL", "--retry", "5", "--retry-delay", "5", "-C", "-", "-o", dest_mmproj, murl], check=True)
+        download_if_needed(repo, mmproj_file, entries.get(mmproj_file, 0), dest_mmproj)
 
 resolve_and_pull("mradermacher/Huihui-Qwen3.5-2B-abliterated-GGUF", "/opt/labai/models/tier1-fast.gguf")
 resolve_and_pull("mradermacher/Huihui-Qwen3.5-4B-abliterated-GGUF", "/opt/labai/models/tier2-reasoning.gguf", "/opt/labai/models/tier2-mmproj.gguf")
