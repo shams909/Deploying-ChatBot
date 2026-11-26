@@ -31,8 +31,23 @@ def test_frontier_prompt_injects_date_and_skips_slang_and_clipped_greetings(monk
     steered = apply_dynamic_steering([{"role": "user", "content": "yo sup"}], decision, now=fixed_dt)
     sys_msg = steered[0]["content"]
     assert "2026-11-26" in sys_msg
+    assert "22:45" not in sys_msg  # Static YYYY-MM-DD prefix preserves KV cache across minutes
     assert "homie" not in sys_msg.lower()
     assert "Answer concisely and directly" not in sys_msg
+
+    time_decision = route_request(
+        requested_model="labai-auto",
+        messages=[{"role": "user", "content": "what time is it right now?"}],
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=0,
+    )
+    time_steered = apply_dynamic_steering(
+        [{"role": "user", "content": "what time is it right now?"}],
+        time_decision,
+        now=fixed_dt,
+    )
+    assert "22:45" in time_steered[0]["content"]
 
 
 def test_web_search_and_image_intent_detection():

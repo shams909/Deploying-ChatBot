@@ -55,6 +55,11 @@ _GREETING_ONLY_PATTERN = re.compile(
     r"^(hi|hello|hey|yo|sup|what'?s up|how are you|good morning|good evening|thanks|thank you)\b[\w\s,!?.']{0,35}$",
     re.IGNORECASE,
 )
+_HARD_THINK_PATTERN = re.compile(
+    r"\b(prove|proof|theorem|derive|step[- ]by[- ]step|race condition|deadlock|root cause|audit|trade[- ]off)\b",
+    re.IGNORECASE,
+)
+_TIME_QUERY_PATTERN = re.compile(r"\b(time|clock|hour|minute|right now|rn)\b", re.IGNORECASE)
 _INTERNAL_TASK_PATTERN = re.compile(
     r"(^|\n)###\s*Task:\s*\n|Generate a concise, 3-5 word title|Generate 1-3 broad tags|suggest 3-5 relevant follow-up",
     re.IGNORECASE,
@@ -275,10 +280,14 @@ def route_request(
                 fallback_applied = True
                 reason = "auto-pro-load-fallback"
 
+    needs_hard_think = bool(_HARD_THINK_PATTERN.search(user_text)) or (
+        target_tier == ModelTier.PRO and complexity >= 0.80
+    )
     enable_thinking = (
         settings.enable_think_steering
         and target_tier in (ModelTier.REASONING, ModelTier.PRO)
         and budget_class == BudgetClass.DEEP
+        and needs_hard_think
     )
 
     return RoutingDecision(
@@ -312,8 +321,12 @@ def apply_dynamic_steering(
     hints: list[str] = []
 
     if not decision.is_internal_task:
-        current_dt = (now or datetime.now().astimezone()).strftime("%Y-%m-%d %H:%M %Z")
-        hints.append(f"{BASE_SYSTEM_PROMPT}\nCurrent date and time: {current_dt}.")
+        local_now = now or datetime.now().astimezone()
+        # Keep YYYY-MM-DD static all day to preserve llama.cpp prefix KV-cache across turns
+        hints.append(f"{BASE_SYSTEM_PROMPT}\nCurrent date: {local_now.strftime('%Y-%m-%d (%Z)')}.")
+        last_user = extract_last_user_text(messages)
+        if _TIME_QUERY_PATTERN.search(last_user):
+            hints.append(f"Current local time: {local_now.strftime('%H:%M %Z')}.")
 
     if extra_context_blocks:
         hints.extend(block for block in extra_context_blocks if block.strip())

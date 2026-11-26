@@ -275,7 +275,7 @@ async def chat_completions(
     verified_images: list[dict[str, str]] = []
     target_url = f"{backend_manager.url_for_tier(decision.target_tier)}/v1/chat/completions"
 
-    if (want_web or want_img) and not decision.is_internal_task:
+    if (want_web or want_img) and not url_context and not decision.is_internal_task:
         planned_msg, tool_images, direct_reply = await _run_tool_planning(
             target_url=target_url,
             tier=decision.target_tier,
@@ -284,9 +284,8 @@ async def chat_completions(
             want_web=want_web,
             want_img=want_img,
         )
-        if direct_reply is not None:
-            if not decision.is_internal_task:
-                await cache_manager.release_user_slot_and_record_tokens(user_id, max(1, len(direct_reply) // 4))
+        if direct_reply is not None and decision.target_tier == ModelTier.FAST:
+            await cache_manager.release_user_slot_and_record_tokens(user_id, max(1, len(direct_reply) // 4))
             badge = _routing_badge(decision, cache_status)
             return _direct_reply(chunk_id, req.model, f"{badge}{direct_reply}", req.stream)
         steered_messages = planned_msg
@@ -361,16 +360,18 @@ async def _run_tool_planning(
         plan_messages.insert(0, {"role": "system", "content": tool_hint})
 
     plan_payload = {
-        "model": tier.value,
+        "model": ModelTier.FAST.value,
         "messages": plan_messages,
         "tools": TOOLS_SCHEMA,
         "tool_choice": "auto",
         "stream": False,
         "temperature": 0.2,
-        "max_tokens": 350,
+        "max_tokens": 250,
     }
+    fast_url = f"{settings.tier1_url}/v1/chat/completions"
     try:
-        plan_data = await _call_non_streaming(target_url, plan_payload, tier)
+        # Always run fast tool planning on Tier 1 (4B) instead of stalling Tier 3 (14B)
+        plan_data = await _call_non_streaming(fast_url, plan_payload, ModelTier.FAST)
         assistant_msg = plan_data["choices"][0]["message"]
         tool_calls = assistant_msg.get("tool_calls") or []
         if tool_calls:
@@ -385,7 +386,7 @@ async def _run_tool_planning(
         direct_content = (assistant_msg.get("content") or "").strip()
         refused_images = "can't display images" in direct_content.lower() or "cannot display images" in direct_content.lower()
         if direct_content and not refused_images and not want_img:
-            return steered_messages, [], direct_content
+            return steered_messages, [], (direct_content if tier == ModelTier.FAST else None)
     except Exception as exc:
         logger.warning("Native tool planning failed (%s); using direct SearXNG fallback.", exc)
 

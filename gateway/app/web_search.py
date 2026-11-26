@@ -411,29 +411,29 @@ async def search_web_pages(client: httpx.AsyncClient, query: str, max_results: i
     return formatted
 
 
+async def _pick_first_valid_candidate(client: httpx.AsyncClient, item: dict[str, Any], clean_q: str) -> dict[str, str] | None:
+    for candidate in (str(item.get("img_src") or ""), str(item.get("thumbnail_src") or "")):
+        if await _verify_image_url(client, candidate):
+            return {"title": str(item.get("title") or clean_q), "image_url": candidate, "source": str(item.get("url") or "")}
+    return None
+
+
 async def search_verified_images(client: httpx.AsyncClient, query: str, limit: int = 3) -> list[dict[str, str]]:
     clean_q = clean_image_query(query)
     try:
         resp = await client.get(
             f"{settings.searxng_url}/search",
             params={"q": clean_q, "categories": "images", "format": "json"},
-            timeout=5.0,
+            timeout=4.0,
         )
         resp.raise_for_status()
-        results = resp.json().get("results", [])
+        results = resp.json().get("results", [])[:8]
     except Exception as exc:
         logger.debug("Image search failed: %s", exc)
         return []
 
-    verified: list[dict[str, str]] = []
-    for item in results[:10]:
-        if len(verified) >= limit:
-            break
-        for candidate in (str(item.get("img_src") or ""), str(item.get("thumbnail_src") or "")):
-            if await _verify_image_url(client, candidate):
-                verified.append({"title": str(item.get("title") or clean_q), "image_url": candidate, "source": str(item.get("url") or "")})
-                break
-    return verified
+    checked = await asyncio.gather(*(_pick_first_valid_candidate(client, item, clean_q) for item in results))
+    return [c for c in checked if c is not None][:limit]
 
 
 async def execute_tool_calls(

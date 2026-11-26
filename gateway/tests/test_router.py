@@ -21,7 +21,7 @@ def test_quick_question_routes_to_fast_and_concise_budget(monkeypatch):
 
 def test_code_debug_routes_to_reasoning_or_pro_with_deep_budget(monkeypatch):
     monkeypatch.setattr(settings, "enable_semantic_embedder", False)
-    prompt = "Debug this FastAPI race condition and implement a fix step by step:\n```python\nasync def f(): pass\n```"
+    prompt = "Debug this FastAPI race condition and prove the fix step by step:\n```python\nasync def f(): pass\n```"
     decision = route_request(
         requested_model="labai-auto",
         messages=[{"role": "user", "content": prompt}],
