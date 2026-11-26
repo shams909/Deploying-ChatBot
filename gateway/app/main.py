@@ -27,6 +27,7 @@ from app.memory import (
 )
 from app.router import (
     PUBLIC_MODELS,
+    BudgetClass,
     ModelTier,
     RoutingDecision,
     apply_dynamic_steering,
@@ -233,6 +234,17 @@ async def chat_completions(
         if not allowed:
             raise HTTPException(status_code=429, detail=deny_reason)
 
+    if (
+        settings.enable_llm_router_judge
+        and req.model == "labai-auto"
+        and not decision.is_internal_task
+        and not decision.is_casual_chat
+        and 0.42 <= decision.complexity_score < 0.68
+        and backend_manager.is_node2_available()
+        and backend_manager.node2_state.queue_depth <= settings.node2_queue_limit
+    ):
+        decision = await _refine_borderline_decision(decision, user_prompt, req.max_tokens)
+
     user_turns = sum(1 for m in req.messages if m.get("role") == "user")
     is_single_turn = user_turns == 1 and not decision.is_internal_task
 
@@ -337,6 +349,50 @@ async def chat_completions(
     finally:
         if not decision.is_internal_task:
             await cache_manager.release_user_slot_and_record_tokens(user_id, output_tokens)
+
+
+async def _refine_borderline_decision(
+    decision: RoutingDecision,
+    user_prompt: str,
+    explicit_max_tokens: int | None,
+) -> RoutingDecision:
+    """1-token LLM difficulty judge on Fast (4B) for gray-zone prompts across any domain."""
+    judge_prompt = (
+        "Classify the difficulty of this user request into ONE word: SIMPLE, MEDIUM, or HARD.\n"
+        "- SIMPLE: basic facts, greetings, short definitions, casual chat.\n"
+        "- MEDIUM: standard coding, debugging, comparisons, explanations.\n"
+        "- HARD: deep multi-step architecture, formal proofs, advanced multi-domain synthesis, complex audits.\n\n"
+        f"Request: {user_prompt[:350]}\nLabel:\n/no_think"
+    )
+    payload = {
+        "model": ModelTier.FAST.value,
+        "messages": [{"role": "user", "content": judge_prompt}],
+        "stream": False,
+        "temperature": 0.0,
+        "max_tokens": 4,
+    }
+    try:
+        async with backend_manager.node1_semaphore:
+            resp = await backend_manager.client.post(
+                f"{settings.tier1_url}/v1/chat/completions",
+                json=payload,
+                timeout=2.5,
+            )
+            resp.raise_for_status()
+            label = resp.json()["choices"][0]["message"].get("content", "").strip().upper()
+    except Exception:
+        return decision
+
+    if "HARD" in label:
+        decision.target_tier = ModelTier.PRO
+        decision.budget_class = BudgetClass.DEEP
+        if explicit_max_tokens is None:
+            decision.max_tokens = settings.budget_deep_tokens
+        decision.reason = "auto-judge-pro"
+    elif "SIMPLE" in label:
+        decision.target_tier = ModelTier.FAST
+        decision.reason = "auto-judge-fast"
+    return decision
 
 
 async def _run_tool_planning(

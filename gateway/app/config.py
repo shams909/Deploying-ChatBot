@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     # Routing & Caching
     enable_semantic_embedder: bool = True
+    enable_llm_router_judge: bool = True
     embedder_model: str = "BAAI/bge-small-en-v1.5"
     semantic_cache_threshold: float = 0.88
     cache_max_temperature: float = 0.85

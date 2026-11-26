@@ -97,3 +97,37 @@ def test_apply_dynamic_steering_strips_prior_routing_badges(monkeypatch):
     assistant_msg = next(m for m in steered if m["role"] == "assistant")
     assert "LabAI →" not in assistant_msg["content"]
     assert assistant_msg["content"] == "Hi!"
+
+
+def test_distributed_architecture_prompt_escalates_to_pro(monkeypatch):
+    monkeypatch.setattr(settings, "enable_semantic_embedder", False)
+    prompt = (
+        "Architect a fault-tolerant distributed rate limiter using Redis and Kafka "
+        "with race-condition handling, trade-off analysis, and a Mermaid sequence diagram"
+    )
+    decision = route_request(
+        requested_model="labai-auto",
+        messages=[{"role": "user", "content": prompt}],
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=0,
+    )
+    assert decision.target_tier == ModelTier.PRO
+
+
+def test_retry_frustration_escalates_follow_up_to_pro(monkeypatch):
+    monkeypatch.setattr(settings, "enable_semantic_embedder", False)
+    history = [
+        {"role": "user", "content": "Explain how this works"},
+        {"role": "assistant", "content": "Basic summary..."},
+        {"role": "user", "content": "that's wrong, go deeper"},
+    ]
+    decision = route_request(
+        requested_model="labai-auto",
+        messages=history,
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=0,
+    )
+    assert decision.target_tier == ModelTier.PRO
+    assert decision.reason == "auto-retry-escalation"

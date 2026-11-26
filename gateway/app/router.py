@@ -43,6 +43,10 @@ _DEEP_PATTERN = re.compile(
     r"\b(architect|architecture|debug|refactor|implement|design|prove|proof|step[- ]by[- ]step|optimize|benchmark|compare|in detail|comprehensive|explain thoroughly|system design)\b",
     re.IGNORECASE,
 )
+_PRO_PATTERN = re.compile(
+    r"\b(distributed|fault[- ]tolerant|consensus|race[- ]condition|race condition|deadlock|trade[- ]off|theorem|microservic|high availability|scalab|security audit)\b",
+    re.IGNORECASE,
+)
 _DIAGRAM_PATTERN = re.compile(
     r"\b(diagram|flowchart|sequence diagram|er diagram|class diagram|architecture diagram|visualize|mermaid|mindmap)\b",
     re.IGNORECASE,
@@ -60,6 +64,10 @@ _HARD_THINK_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _TIME_QUERY_PATTERN = re.compile(r"\b(time|clock|hour|minute|right now|rn)\b", re.IGNORECASE)
+_ESCALATE_PATTERN = re.compile(
+    r"\b(that('?s| is)? wrong|didn'?t work|not working|still broken|try again|go deeper|you missed|not quite|more thorough|do better)\b",
+    re.IGNORECASE,
+)
 _INTERNAL_TASK_PATTERN = re.compile(
     r"(^|\n)###\s*Task:\s*\n|Generate a concise, 3-5 word title|Generate 1-3 broad tags|suggest 3-5 relevant follow-up",
     re.IGNORECASE,
@@ -72,18 +80,25 @@ _ANCHOR_PROTOTYPES = {
         "What is the capital of France?",
         "Give me a quick one-sentence definition of HTTP.",
         "Translate hello to Spanish.",
+        "Write a haiku about rain.",
     ],
     "reasoning": [
         "Write a Python function to reverse a linked list and explain its time complexity.",
         "Debug why my FastAPI async endpoint is blocking the event loop.",
         "Compare Redis and PostgreSQL for session storage.",
         "Solve this calculus integral step by step.",
+        "Explain the differences between fiscal and monetary policy with examples.",
+        "Summarize the causes and turning points of the Industrial Revolution.",
     ],
     "pro": [
         "Design a fault-tolerant distributed rate limiter across multiple data centers with trade-off analysis.",
         "Refactor this multi-file microservice architecture to eliminate race conditions and memory leaks.",
         "Prove the correctness of Dijkstra's algorithm and analyze Fibonacci heap complexity rigorously.",
         "Conduct an exhaustive security and performance audit of this distributed consensus protocol.",
+        "Analyze Keynesian versus Austrian monetary policy under hyperinflation using game-theoretic equilibrium.",
+        "Design a CRISPR prime-editing delivery strategy and evaluate off-target mutagenesis risks.",
+        "Derive the Navier-Stokes boundary layer equations and analyze turbulence closure approximations.",
+        "Write a comprehensive legal and policy analysis comparing GDPR and US federal privacy frameworks.",
     ],
 }
 
@@ -105,11 +120,11 @@ MERMAID_SYSTEM_HINT = (
 
 
 class SemanticScorer:
-    """Optional lightweight ONNX embedder (fastembed) with safe offline fallback."""
+    """Optional lightweight ONNX embedder (fastembed) with multi-domain nearest-prototype scoring."""
 
     def __init__(self) -> None:
         self._model = None
-        self._centroids: dict[str, np.ndarray] = {}
+        self._proto_vecs: dict[str, np.ndarray] = {}
         self._init_attempted = False
 
     def _ensure_loaded(self) -> None:
@@ -123,10 +138,9 @@ class SemanticScorer:
 
             self._model = TextEmbedding(model_name=settings.embedder_model)
             for label, texts in _ANCHOR_PROTOTYPES.items():
-                vecs = list(self._model.embed(texts))
-                centroid = np.mean(np.vstack(vecs), axis=0)
-                norm = np.linalg.norm(centroid)
-                self._centroids[label] = centroid / (norm + 1e-9)
+                vecs = np.vstack(list(self._model.embed(texts)))
+                norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+                self._proto_vecs[label] = vecs / (norms + 1e-9)
             logger.info("Loaded ONNX semantic router embedder: %s", settings.embedder_model)
         except Exception as exc:
             logger.warning("Semantic embedder unavailable (%s); falling back to heuristic routing.", exc)
@@ -142,11 +156,11 @@ class SemanticScorer:
 
     def complexity_score(self, text: str) -> float | None:
         vec = self.embed(text)
-        if vec is None or not self._centroids:
+        if vec is None or not self._proto_vecs:
             return None
-        sims = {k: float(np.dot(vec, c)) for k, c in self._centroids.items()}
-        # Map relative affinity toward reasoning/pro vs simple into [0, 1]
-        score = 0.5 + 0.8 * (0.4 * sims["reasoning"] + 0.6 * sims["pro"] - sims["simple"])
+        # Max similarity within each domain bucket preserves multi-domain sharpness
+        sims = {k: float(np.max(mat @ vec)) for k, mat in self._proto_vecs.items()}
+        score = 0.5 + 1.5 * (0.35 * sims["reasoning"] + 0.65 * sims["pro"] - sims["simple"])
         return max(0.0, min(1.0, score))
 
 
@@ -186,6 +200,7 @@ def extract_last_user_text(messages: list[dict[str, Any]]) -> str:
 def compute_heuristic_complexity(messages: list[dict[str, Any]], user_text: str) -> tuple[float, bool, bool, bool]:
     has_code = bool(_CODE_PATTERN.search(user_text))
     has_deep = bool(_DEEP_PATTERN.search(user_text))
+    has_pro = bool(_PRO_PATTERN.search(user_text))
     wants_diagram = bool(_DIAGRAM_PATTERN.search(user_text))
     looks_quick = bool(_QUICK_PATTERN.match(user_text.strip())) and len(user_text) < 90 and not has_code
 
@@ -203,6 +218,8 @@ def compute_heuristic_complexity(messages: list[dict[str, Any]], user_text: str)
         score += 0.25
     if has_deep:
         score += 0.25
+    if has_pro:
+        score += 0.15
     if wants_diagram:
         score += 0.15
     if turns >= 5:
@@ -236,7 +253,14 @@ def route_request(
     heur_score, has_code, has_deep, wants_diagram = compute_heuristic_complexity(messages, user_text)
 
     sem_score = semantic_scorer.complexity_score(user_text[:1000]) if user_text else None
-    complexity = (0.6 * heur_score + 0.4 * sem_score) if sem_score is not None else heur_score
+    complexity = (0.45 * heur_score + 0.55 * sem_score) if sem_score is not None else heur_score
+    if sem_score is not None and sem_score >= 0.72:
+        complexity = max(complexity, sem_score)
+
+    turns = sum(1 for m in messages if m.get("role") == "user")
+    retry_escalate = turns >= 2 and bool(_ESCALATE_PATTERN.search(user_text))
+    if retry_escalate:
+        complexity = max(complexity, 0.72)
 
     # Determine Dynamic Context Budget
     if complexity < 0.30 and not has_code and not has_deep:
@@ -268,13 +292,13 @@ def route_request(
         if complexity < 0.35:
             target_tier = ModelTier.FAST
             reason = "auto-simple"
-        elif complexity < 0.72:
+        elif complexity < 0.68:
             target_tier = ModelTier.REASONING
             reason = "auto-reasoning"
         else:
             if node2_healthy and node2_queue_depth <= settings.node2_queue_limit:
                 target_tier = ModelTier.PRO
-                reason = "auto-pro"
+                reason = "auto-retry-escalation" if retry_escalate else "auto-pro"
             else:
                 target_tier = ModelTier.REASONING
                 fallback_applied = True
