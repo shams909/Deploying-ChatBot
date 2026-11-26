@@ -139,7 +139,7 @@ async def extract_and_save_memories(user_id: str, chat_id: str | None, user_text
         "preferred programming language, or preferences) from the message below. "
         "Ignore greetings, one-off questions, or generic trivia. "
         'Return ONLY a JSON array of short strings (e.g. ["User works with Python on Linux"]), or [] if none.\n\n'
-        f"User message: {user_text[:600]}\n/no_think"
+        f"User message: {user_text[:600]}"
     )
     payload = {
         "model": ModelTier.FAST.value,
@@ -147,6 +147,7 @@ async def extract_and_save_memories(user_id: str, chat_id: str | None, user_text
         "stream": False,
         "temperature": 0.1,
         "max_tokens": 120,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     try:
         async with backend_manager.node1_semaphore:

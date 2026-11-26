@@ -321,6 +321,7 @@ async def chat_completions(
         "temperature": req.temperature,
         "top_p": req.top_p,
         "max_tokens": decision.max_tokens,
+        "chat_template_kwargs": {"enable_thinking": decision.enable_thinking},
     }
 
     if req.stream:
@@ -382,13 +383,14 @@ async def _handle_image_on_text_tier(steered_messages: list[dict[str, Any]], use
                 "messages": [
                     {
                         "role": "system",
-                        "content": "Describe all boxes, arrows, labels, text, and layout in this uploaded image accurately in detail.\n/no_think",
+                        "content": "Describe all boxes, arrows, labels, text, and layout in this uploaded image accurately in detail.",
                     },
                     image_msgs[-1],
                 ],
                 "stream": False,
                 "temperature": 0.1,
                 "max_tokens": 700,
+                "chat_template_kwargs": {"enable_thinking": False},
             }
             try:
                 data = await _call_non_streaming(f"{v_url}/v1/chat/completions", vision_payload, v_tier)
@@ -417,7 +419,7 @@ async def _refine_borderline_decision(
         "- SIMPLE: basic facts, greetings, short definitions, casual chat.\n"
         "- MEDIUM: standard coding, debugging, comparisons, explanations.\n"
         "- HARD: deep multi-step architecture, formal proofs, advanced multi-domain synthesis, complex audits.\n\n"
-        f"Request: {user_prompt[:350]}\nLabel:\n/no_think"
+        f"Request: {user_prompt[:350]}\nLabel:"
     )
     payload = {
         "model": ModelTier.FAST.value,
@@ -425,6 +427,7 @@ async def _refine_borderline_decision(
         "stream": False,
         "temperature": 0.0,
         "max_tokens": 4,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     try:
         async with backend_manager.node1_semaphore:
@@ -463,7 +466,7 @@ async def _run_tool_planning(
     tool_hint = (
         "You have live tools: web_search(query) and image_search(query). "
         "If the user asks for photos/faces/images of multiple subjects, call image_search once per subject. "
-        "Never claim you cannot display images.\n/no_think"
+        "Never claim you cannot display images."
     )
     if plan_messages and plan_messages[0].get("role") == "system":
         plan_messages[0]["content"] = f"{plan_messages[0]['content']}\n{tool_hint}"
@@ -478,6 +481,7 @@ async def _run_tool_planning(
         "stream": False,
         "temperature": 0.2,
         "max_tokens": 250,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     fast_url = f"{settings.tier1_url}/v1/chat/completions"
     try:

@@ -396,9 +396,6 @@ def apply_dynamic_steering(
     if decision.inject_mermaid_hint:
         hints.append(MERMAID_SYSTEM_HINT)
 
-    if settings.enable_think_steering:
-        hints.append("/think" if decision.enable_thinking else "/no_think")
-
     if hints:
         directive = "\n".join(hints)
         if steered and steered[0].get("role") == "system":
