@@ -33,7 +33,7 @@ echo "==> [2/4] Provisioning worker node02 remotely (Tier 3 + Node Exporter)..."
 ssh -t "${WORKER_USER}@${WORKER_IP}" "bash ${REMOTE_DIR}/scripts/node_provision.sh worker"
 
 echo "==> [3/4] Provisioning master node01 locally (Tier 1 + Tier 2 + Docker)..."
-bash "${REPO_DIR}/scripts/node_provision.sh master"
+bash "${REPO_DIR}/scripts/node_provision.sh" master
 
 echo "==> [4/4] Starting Control Plane stack (Gateway, Open WebUI, SearXNG, Redis, Caddy, Monitoring)..."
 cd "${REPO_DIR}/deploy"
