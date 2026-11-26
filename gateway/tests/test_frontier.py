@@ -190,7 +190,20 @@ def test_multimodal_image_guard_and_vision_routing(monkeypatch):
     stripped = strip_image_attachments(msgs)
     assert stripped[0]["content"] == "Turn this diagram into clean Mermaid"
 
-    monkeypatch.setattr(settings, "tier1_vision_enabled", True)
+    monkeypatch.setattr(settings, "vision_enabled", True)
     decision = route_request("labai-auto", msgs, None, True, 0)
-    assert decision.target_tier == ModelTier.FAST
-    assert decision.reason == "auto-vision-tier1"
+    assert decision.target_tier == ModelTier.REASONING
+    assert decision.reason == "auto-vision-reasoning"
+
+    deep_msgs = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Architect a fault-tolerant distributed consensus system from this diagram with trade-off analysis"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            ],
+        }
+    ]
+    deep_decision = route_request("labai-auto", deep_msgs, None, True, 0)
+    assert deep_decision.target_tier == ModelTier.PRO
+    assert deep_decision.reason == "auto-vision-pro"

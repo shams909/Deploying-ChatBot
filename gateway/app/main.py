@@ -200,9 +200,9 @@ def _routing_badge(decision: RoutingDecision, cache_status: str) -> str:
     if not settings.enable_routing_badge or decision.is_internal_task:
         return ""
     tier_label = {
-        ModelTier.FAST: "Fast (4B)",
-        ModelTier.REASONING: "Reasoning (8B)",
-        ModelTier.PRO: "Pro (14B)",
+        ModelTier.FAST: "Fast (2B)",
+        ModelTier.REASONING: "Reasoning (4B)",
+        ModelTier.PRO: "Pro (9B)",
     }[decision.target_tier]
     fb = " • Fallback" if decision.fallback_applied else ""
     return f"> *LabAI → `{tier_label}` • Budget: `{decision.budget_class.value}` (`{decision.max_tokens}`) • Cache: `{cache_status}`{fb}*\n\n"
@@ -287,8 +287,13 @@ async def chat_completions(
 
     extra_blocks = [b for b in (recalled_memory, url_context) if b]
     steered_messages = apply_dynamic_steering(req.messages, decision, extra_context_blocks=extra_blocks)
-    if has_images and (decision.target_tier != ModelTier.FAST or not settings.tier1_vision_enabled):
-        steered_messages = await _handle_image_on_text_tier(steered_messages, user_prompt)
+    if has_images:
+        tier_has_native_vision = (
+            (settings.vision_enabled and decision.target_tier in (ModelTier.REASONING, ModelTier.PRO))
+            or (settings.tier1_vision_enabled and decision.target_tier == ModelTier.FAST)
+        )
+        if not tier_has_native_vision:
+            steered_messages = await _handle_image_on_text_tier(steered_messages, user_prompt)
     verified_images: list[dict[str, str]] = []
     target_url = f"{backend_manager.url_for_tier(decision.target_tier)}/v1/chat/completions"
 
@@ -357,16 +362,23 @@ async def chat_completions(
 
 
 async def _handle_image_on_text_tier(steered_messages: list[dict[str, Any]], user_prompt: str) -> list[dict[str, Any]]:
-    """Prevent HTTP 500 on text-only tiers; transcribe via Tier 1 Vision if enabled."""
+    """Prevent HTTP 500 on text-only tiers; transcribe via a Vision-enabled tier if available."""
     vision_note = (
         "Note: The user attached an image/screenshot, but vision is not enabled on this cluster yet. "
         "Politely let them know you cannot see uploaded images directly and ask them to describe it or paste text/Mermaid code."
     )
-    if settings.tier1_vision_enabled:
+    vision_backend: tuple[str, ModelTier] | None = None
+    if settings.vision_enabled:
+        vision_backend = (settings.tier2_url, ModelTier.REASONING)
+    elif settings.tier1_vision_enabled:
+        vision_backend = (settings.tier1_url, ModelTier.FAST)
+
+    if vision_backend is not None:
+        v_url, v_tier = vision_backend
         image_msgs = [m for m in steered_messages if isinstance(m.get("content"), list)]
         if image_msgs:
             vision_payload = {
-                "model": ModelTier.FAST.value,
+                "model": v_tier.value,
                 "messages": [
                     {
                         "role": "system",
@@ -379,12 +391,12 @@ async def _handle_image_on_text_tier(steered_messages: list[dict[str, Any]], use
                 "max_tokens": 700,
             }
             try:
-                data = await _call_non_streaming(f"{settings.tier1_url}/v1/chat/completions", vision_payload, ModelTier.FAST)
+                data = await _call_non_streaming(f"{v_url}/v1/chat/completions", vision_payload, v_tier)
                 desc = data["choices"][0]["message"].get("content", "").strip()
                 if desc:
                     vision_note = f"Visual description extracted from the user's attached image:\n{desc}"
             except Exception as exc:
-                logger.warning("Tier 1 Vision transcription failed (%s)", exc)
+                logger.warning("Vision transcription failed (%s)", exc)
 
     cleaned = strip_image_attachments(steered_messages)
     if cleaned and cleaned[0].get("role") == "system":

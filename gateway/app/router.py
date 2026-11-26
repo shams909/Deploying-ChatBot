@@ -29,10 +29,10 @@ class BudgetClass(str, Enum):
 
 
 PUBLIC_MODELS = [
-    {"id": "labai-auto", "owned_by": "labai-router", "description": "Smart Auto Router (Fast / Reasoning / Pro)"},
-    {"id": "labai-fast", "owned_by": "node01-qwen3-4b", "description": "Fast Everyday Chat (Qwen3-4B)"},
-    {"id": "labai-reasoning", "owned_by": "node01-qwen3-8b", "description": "Coding & Reasoning (Qwen3-8B)"},
-    {"id": "labai-pro", "owned_by": "node02-qwen3-14b", "description": "Maximum Quality (Qwen3-14B)"},
+    {"id": "labai-auto", "owned_by": "labai-router", "description": "Smart Auto Router (Qwen3.5 2B / 4B / 9B)"},
+    {"id": "labai-fast", "owned_by": "node01-qwen35-2b", "description": "Fast Everyday Chat (Qwen3.5-2B)"},
+    {"id": "labai-reasoning", "owned_by": "node01-qwen35-4b", "description": "Reasoning & Vision (Qwen3.5-4B)"},
+    {"id": "labai-pro", "owned_by": "node02-qwen35-9b", "description": "Maximum Quality & Vision (Qwen3.5-9B)"},
 ]
 
 _CODE_PATTERN = re.compile(
@@ -103,13 +103,12 @@ _ANCHOR_PROTOTYPES = {
 }
 
 BASE_SYSTEM_PROMPT = (
-    "You are a capable, honest, and thoughtful AI assistant. "
-    "Adapt naturally to the user's register without forcing slang, catchphrases, or robotic filler openers. "
+    "You are a direct, sharp, honest, and unfiltered AI assistant. "
+    "Adapt naturally to the user's tone and context without lecturing, moralizing, or adding robotic filler openers. "
     "Respond directly, stop once your point is complete without trailing sign-off lines, and use emojis sparingly. "
     "Reply in the user's language (default to English for ambiguous English slang). "
-    "Be epistemically honest: never invent dates, facts, APIs, or citations, and never claim your model weights "
-    "update automatically or learn live across sessions unless web search results or memory context are provided below. "
-    "Stay calm, respectful, and neutral; never endorse or repeat racial slurs or abusive language."
+    "Be epistemically honest: never invent dates, facts, APIs, or citations, and rely on provided live web/URL "
+    "search results or remembered context whenever available."
 )
 
 MERMAID_SYSTEM_HINT = (
@@ -311,9 +310,18 @@ def route_request(
             reason = "manual-pro-failover-node2-down"
     else:
         # Auto Routing Policy
-        if has_image_attachments(messages) and settings.tier1_vision_enabled:
-            target_tier = ModelTier.FAST
-            reason = "auto-vision-tier1"
+        vision_ready = settings.vision_enabled or settings.tier1_vision_enabled
+        if has_image_attachments(messages) and vision_ready:
+            if settings.vision_enabled:
+                if complexity >= 0.68 and node2_healthy and node2_queue_depth <= settings.node2_queue_limit:
+                    target_tier = ModelTier.PRO
+                    reason = "auto-vision-pro"
+                else:
+                    target_tier = ModelTier.REASONING
+                    reason = "auto-vision-reasoning"
+            else:
+                target_tier = ModelTier.FAST
+                reason = "auto-vision-tier1"
         elif complexity < 0.35:
             target_tier = ModelTier.FAST
             reason = "auto-simple"

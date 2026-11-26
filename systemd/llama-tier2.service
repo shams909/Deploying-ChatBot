@@ -1,5 +1,5 @@
 [Unit]
-Description=LabAI Tier 2 Inference (Qwen3-8B Reasoning)
+Description=LabAI Tier 2 Reasoning + Vision Inference (Huihui-Qwen3.5-4B-abliterated)
 After=network-online.target
 Wants=network-online.target
 
@@ -11,7 +11,8 @@ Group=cluster
 CPUAffinity=0 2 4 6 8 10 12 14
 Nice=-5
 ExecStart=/opt/llama.cpp/build/bin/llama-server \
-  --model /opt/labai/models/Qwen3-8B-Q4_K_M.gguf \
+  --model /opt/labai/models/tier2-reasoning.gguf \
+  --mmproj /opt/labai/models/tier2-mmproj.gguf \
   --alias labai-reasoning \
   --host 0.0.0.0 \
   --port 8082 \
@@ -23,6 +24,7 @@ ExecStart=/opt/llama.cpp/build/bin/llama-server \
   --cache-type-k q8_0 \
   --cache-type-v q8_0 \
   --cache-reuse 256 \
+  --jinja \
   --metrics
 Restart=always
 RestartSec=5

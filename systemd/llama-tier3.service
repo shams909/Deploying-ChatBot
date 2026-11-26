@@ -1,5 +1,5 @@
 [Unit]
-Description=LabAI Tier 3 Inference (Qwen3-14B Pro + 0.6B Speculative Draft)
+Description=LabAI Tier 3 Pro + Vision Inference (Huihui-Qwen3.5-9B-abliterated)
 After=network-online.target
 Wants=network-online.target
 
@@ -11,10 +11,8 @@ Group=cluster
 CPUAffinity=0 2 4 6 8 10 12 14
 Nice=-5
 ExecStart=/opt/llama.cpp/build/bin/llama-server \
-  --model /opt/labai/models/Qwen3-14B-Q4_K_M.gguf \
-  --spec-draft-model /opt/labai/models/Qwen3-0.6B-Q8_0.gguf \
-  --spec-draft-n-max 8 \
-  --spec-draft-p-min 0.5 \
+  --model /opt/labai/models/tier3-pro.gguf \
+  --mmproj /opt/labai/models/tier3-mmproj.gguf \
   --alias labai-pro \
   --host 0.0.0.0 \
   --port 8083 \
@@ -26,6 +24,7 @@ ExecStart=/opt/llama.cpp/build/bin/llama-server \
   --cache-type-k q8_0 \
   --cache-type-v q8_0 \
   --cache-reuse 256 \
+  --jinja \
   --metrics
 Restart=always
 RestartSec=5
