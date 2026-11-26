@@ -32,7 +32,9 @@ from app.router import (
     RoutingDecision,
     apply_dynamic_steering,
     extract_last_user_text,
+    has_image_attachments,
     route_request,
+    strip_image_attachments,
 )
 from app.web_search import (
     TOOLS_SCHEMA,
@@ -247,6 +249,7 @@ async def chat_completions(
 
     user_turns = sum(1 for m in req.messages if m.get("role") == "user")
     is_single_turn = user_turns == 1 and not decision.is_internal_task
+    has_images = has_image_attachments(req.messages)
 
     want_web = False
     want_img = False
@@ -266,7 +269,7 @@ async def chat_completions(
         if url_context:
             WEB_SEARCH_COUNTER.inc()
 
-    is_cacheable = is_single_turn and not (want_web or want_img or has_urls) and not recalled_memory
+    is_cacheable = is_single_turn and not (want_web or want_img or has_urls or has_images) and not recalled_memory
     cached_text, cache_status = await cache_manager.lookup_response(
         model_tier=decision.target_tier.value,
         prompt=user_prompt,
@@ -284,6 +287,8 @@ async def chat_completions(
 
     extra_blocks = [b for b in (recalled_memory, url_context) if b]
     steered_messages = apply_dynamic_steering(req.messages, decision, extra_context_blocks=extra_blocks)
+    if has_images and (decision.target_tier != ModelTier.FAST or not settings.tier1_vision_enabled):
+        steered_messages = await _handle_image_on_text_tier(steered_messages, user_prompt)
     verified_images: list[dict[str, str]] = []
     target_url = f"{backend_manager.url_for_tier(decision.target_tier)}/v1/chat/completions"
 
@@ -349,6 +354,44 @@ async def chat_completions(
     finally:
         if not decision.is_internal_task:
             await cache_manager.release_user_slot_and_record_tokens(user_id, output_tokens)
+
+
+async def _handle_image_on_text_tier(steered_messages: list[dict[str, Any]], user_prompt: str) -> list[dict[str, Any]]:
+    """Prevent HTTP 500 on text-only tiers; transcribe via Tier 1 Vision if enabled."""
+    vision_note = (
+        "Note: The user attached an image/screenshot, but vision is not enabled on this cluster yet. "
+        "Politely let them know you cannot see uploaded images directly and ask them to describe it or paste text/Mermaid code."
+    )
+    if settings.tier1_vision_enabled:
+        image_msgs = [m for m in steered_messages if isinstance(m.get("content"), list)]
+        if image_msgs:
+            vision_payload = {
+                "model": ModelTier.FAST.value,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "Describe all boxes, arrows, labels, text, and layout in this uploaded image accurately in detail.\n/no_think",
+                    },
+                    image_msgs[-1],
+                ],
+                "stream": False,
+                "temperature": 0.1,
+                "max_tokens": 700,
+            }
+            try:
+                data = await _call_non_streaming(f"{settings.tier1_url}/v1/chat/completions", vision_payload, ModelTier.FAST)
+                desc = data["choices"][0]["message"].get("content", "").strip()
+                if desc:
+                    vision_note = f"Visual description extracted from the user's attached image:\n{desc}"
+            except Exception as exc:
+                logger.warning("Tier 1 Vision transcription failed (%s)", exc)
+
+    cleaned = strip_image_attachments(steered_messages)
+    if cleaned and cleaned[0].get("role") == "system":
+        cleaned[0]["content"] = f"{cleaned[0]['content']}\n\n{vision_note}"
+    else:
+        cleaned.insert(0, {"role": "system", "content": vision_note})
+    return cleaned
 
 
 async def _refine_borderline_decision(

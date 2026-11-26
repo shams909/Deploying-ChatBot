@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     enable_think_steering: bool = True
     enable_auto_web_search: bool = True
     enable_long_term_memory: bool = True
+    tier1_vision_enabled: bool = False
     web_search_max_results: int = 3
     memory_max_items_per_user: int = 50
     memory_recall_top_k: int = 4

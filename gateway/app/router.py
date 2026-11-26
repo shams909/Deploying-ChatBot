@@ -197,6 +197,28 @@ def extract_last_user_text(messages: list[dict[str, Any]]) -> str:
     return ""
 
 
+def has_image_attachments(messages: list[dict[str, Any]]) -> bool:
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            if any(isinstance(p, dict) and p.get("type") == "image_url" for p in content):
+                return True
+    return False
+
+
+def strip_image_attachments(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Strip image_url parts so text-only llama-server backends never return HTTP 500."""
+    cleaned: list[dict[str, Any]] = []
+    for msg in messages:
+        copy = dict(msg)
+        content = copy.get("content")
+        if isinstance(content, list):
+            text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
+            copy["content"] = " ".join(t for t in text_parts if t).strip() or "[Image attached]"
+        cleaned.append(copy)
+    return cleaned
+
+
 def compute_heuristic_complexity(messages: list[dict[str, Any]], user_text: str) -> tuple[float, bool, bool, bool]:
     has_code = bool(_CODE_PATTERN.search(user_text))
     has_deep = bool(_DEEP_PATTERN.search(user_text))
@@ -289,7 +311,10 @@ def route_request(
             reason = "manual-pro-failover-node2-down"
     else:
         # Auto Routing Policy
-        if complexity < 0.35:
+        if has_image_attachments(messages) and settings.tier1_vision_enabled:
+            target_tier = ModelTier.FAST
+            reason = "auto-vision-tier1"
+        elif complexity < 0.35:
             target_tier = ModelTier.FAST
             reason = "auto-simple"
         elif complexity < 0.68:

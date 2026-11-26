@@ -4,7 +4,13 @@ from datetime import datetime, timezone
 
 from app.config import settings
 from app.memory import delete_memories, handle_memory_command, list_memories
-from app.router import ModelTier, apply_dynamic_steering, route_request
+from app.router import (
+    ModelTier,
+    apply_dynamic_steering,
+    has_image_attachments,
+    route_request,
+    strip_image_attachments,
+)
 from app.web_search import (
     _special_url_candidates,
     clean_image_query,
@@ -167,3 +173,24 @@ def test_html_meta_og_fallback_for_js_pages():
     html = '<html><head><meta property="og:title" content="Breaking Tech News"><meta property="og:description" content="Summary of article."></head><body><div id="app"></div></body></html>'
     extracted = extract_clean_text(html)
     assert "Breaking Tech News" in extracted and "Summary of article." in extracted
+
+
+def test_multimodal_image_guard_and_vision_routing(monkeypatch):
+    monkeypatch.setattr(settings, "enable_semantic_embedder", False)
+    msgs = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Turn this diagram into clean Mermaid"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            ],
+        }
+    ]
+    assert has_image_attachments(msgs) is True
+    stripped = strip_image_attachments(msgs)
+    assert stripped[0]["content"] == "Turn this diagram into clean Mermaid"
+
+    monkeypatch.setattr(settings, "tier1_vision_enabled", True)
+    decision = route_request("labai-auto", msgs, None, True, 0)
+    assert decision.target_tier == ModelTier.FAST
+    assert decision.reason == "auto-vision-tier1"
