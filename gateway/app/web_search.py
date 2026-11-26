@@ -27,7 +27,7 @@ _WEB_INTENT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _IMAGE_INTENT_PATTERN = re.compile(
-    r"\b((?:show|send|give|find|drop)\s+(?:me\s+)?(?:another|more|a|an|the)?\s*(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces|snap)|"
+    r"\b((?:show|send|give|find|drop)\s+(?:me\s+)?(?:another|more|a|an|the)?\s*(?:[\w'-]+\s+){0,3}?(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces|snap)|"
     r"(?:a|an|the)?\s*(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces)\s+of|"
     r"what\s+does\s+.+\s+look\s+like)\b",
     re.IGNORECASE,
@@ -56,9 +56,16 @@ _INTERNAL_HOSTS = {
     "host.docker.internal",
 }
 
+_IMAGE_LEAD_VERB = re.compile(
+    r"^(?:please\s+)?(?:show|send|give|find|get|drop)\s+(?:me\s+)?(?:another|more|one\s+more)?\s*",
+    re.IGNORECASE,
+)
 _IMAGE_PREFIX_STRIP = re.compile(
-    r"^(?:please\s+)?(?:show|send|give|find|get|drop)?\s*(?:me\s+)?"
-    r"(?:another|more|a|an|the)?\s*(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces|snap)\s*(?:of\s+)?",
+    r"^(?:another|more|a|an|the)?\s*(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces|snap)\s*(?:of\s+)?",
+    re.IGNORECASE,
+)
+_IMAGE_SUFFIX_STRIP = re.compile(
+    r"\s+(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces|snap)$",
     re.IGNORECASE,
 )
 _BROWSER_HEADERS = {
@@ -239,7 +246,9 @@ def might_need_tools(user_text: str) -> tuple[bool, bool]:
 
 
 def clean_image_query(user_text: str) -> str:
-    cleaned = _IMAGE_PREFIX_STRIP.sub("", user_text.strip())
+    cleaned = _IMAGE_LEAD_VERB.sub("", user_text.strip())
+    cleaned = _IMAGE_PREFIX_STRIP.sub("", cleaned)
+    cleaned = _IMAGE_SUFFIX_STRIP.sub("", cleaned)
     cleaned = re.sub(r"^(?:a|an|the)\s+", "", cleaned, flags=re.IGNORECASE)
     return cleaned[:150].strip() or user_text[:150].strip()
 

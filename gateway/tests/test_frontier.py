@@ -70,6 +70,8 @@ def test_web_search_and_image_intent_detection():
     assert needs_image_search("Draw an architecture diagram of Redis") is False
     assert clean_image_query("show me an image of a tesla") == "tesla"
     assert clean_image_query("an image of a server rack") == "server rack"
+    assert clean_image_query("give me another sunset pic") == "sunset"
+    assert needs_image_search("give me another sunset pic") is True
 
 
 def test_html_text_extractor_strips_scripts_and_tags():
