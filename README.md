@@ -28,13 +28,14 @@ Instead of wrapping a single model in a basic UI, **LabAI** implements a custom 
 | **Memory** | `14.88 GB` DDR5-4800 (Single-Channel, 1×16 GB) | `14.88 GB` DDR5-4800 (Single-Channel, 1×16 GB) |
 | **Storage** | `456.3 GB` SSD | `456.3 GB` SSD |
 | **OS** | Ubuntu Desktop (`Linux 7.0.0-44-generic`, `x86_64`) | Ubuntu Desktop (`Linux 7.0.0-44-generic`, `x86_64`) |
+| **Remote Access** | Tailscale SSH (managed remotely 24/7) | Tailscale SSH (managed remotely 24/7) |
 | **NIC / Switch** | `2.5GbE` NIC negotiated at `100Mb/s` (`94.7 Mbps`) | `2.5GbE` NIC negotiated at `100Mb/s` (`94.0 Mbps`) |
 
 ---
 
 ## Implementation Phases
 
-1. **Phase 0 — OS & Bare-Metal Tuning:** Switch Ubuntu Desktop to headless server target (`multi-user.target` to reclaim ~1.5 GB RAM), configure SSH keys, disable swap thrashing, and verify P-core vs. E-core CPU IDs.
+1. **Phase 0 — Remote-Safe OS Prep (via Tailscale SSH):** Keep Ubuntu Desktop intact (`13.14 GB` RAM already available), disable auto-sleep/suspend so the lab PCs never sleep when idle, configure `vm.swappiness=1`, and verify P-core vs. E-core CPU IDs (`lscpu -e`).
 2. **Phase 1 — Inference Engine (`llama.cpp`):** Build `llama-server` natively (`-DGGML_NATIVE=ON`), pull `Qwen3-4B`, `Qwen3-8B`, and `Qwen3-14B` (`Q4_K_M`), and run as `systemd` services pinned to P-cores.
 3. **Phase 2 — Custom FastAPI AI Gateway:** Implement OpenAI-compatible SSE streaming, 3-stage Auto Router, dynamic token budgeting, Node 01 inference semaphore, Redis semantic cache, and Node 02 circuit breaker.
 4. **Phase 3 — Chat UI, Diagrams & Web/Image Search:** Deploy Open WebUI + SearXNG + Redis + Caddy reverse proxy (SSE unbuffered) pinned to E-cores.

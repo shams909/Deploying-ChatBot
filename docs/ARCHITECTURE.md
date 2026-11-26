@@ -14,7 +14,7 @@ Every architectural decision in this project flows directly from measured hardwa
 | **Core Topology** | Hybrid Alder Lake: `8` Performance cores (`16T`) + `4` Efficiency cores (`4T`), `12 MiB` L2 (`9` instances), `25 MiB` L3 | Running inference across all `20` threads causes P-cores to stall at thread barriers waiting for slower E-cores. **P-cores must be isolated for inference; E-cores run web/infra.** |
 | **Memory** | `14.88 GB` DDR5-4800 (`Controller0-DIMMA1: 16 GB`, `Controller1-DIMMB1: Empty`) | **Single-channel mode** limits theoretical memory bandwidth to `38.4 GB/s` (~28–32 GB/s real-world). Token decode speed is strictly memory-bandwidth bound (`Bandwidth / Model_Size`), and `14.88 GB` caps single-node models at `~14B Q4_K_M`. |
 | **Network** | `2500baseT/Full` NICs capped at `100Mb/s` by lab switch (`94.7 / 94.0 Mbps`, `0.441 ms` ping) | Distributed model splitting (`llama.cpp` RPC) suffers ~1.5–2s prefill stalls over `100 Mbps` for long prompts. **Keep each model self-contained on one node**; `100 Mbps` is plenty for HTTP/SSE text streaming (~1 Mbps for 200 users). |
-| **OS** | Ubuntu Desktop (`Linux 7.0.0-44-generic`) | Desktop GUI (GNOME/compositor) wastes ~1.2–1.8 GB of critical RAM. Switching default boot target to `multi-user.target` (SSH-managed) reclaims that RAM without wiping the OS. |
+| **OS & Access** | Ubuntu Desktop (`Linux 7.0.0-44-generic`) managed remotely via **Tailscale SSH** | With Ubuntu Desktop + Tailscale already running, `13.14 GB` RAM is still free (`~1.74 GB` baseline). Keep Ubuntu Desktop intact to avoid any remote lockout risk; only disable auto-sleep/suspend (`sleep.target`) so the lab machines stay awake 24/7. |
 
 ---
 
@@ -154,16 +154,16 @@ On the `i7-12700` (`20` logical CPUs), Linux typically maps the `8` HyperThreade
 flowchart LR
     subgraph Node01["node01 - Master (192.168.9.136 | 14.88 GB DDR5)"]
         direction TB
-        N1_P["P-Cores (CPUs 0-15, -t 8): llama-server Tier 1 (4B, ~2.5 GB) + Tier 2 (8B, ~5.0 GB)"]
+        N1_P["P-Cores (CPUs 0-15, -t 8): llama-server Tier 1 (4B, ~2.8 GB) + Tier 2 (8B, ~5.4 GB)"]
         N1_E["E-Cores (CPUs 16-19): Caddy, Open WebUI, FastAPI Gateway, Redis, SearXNG, Prometheus, Grafana (~1.8 GB)"]
-        N1_Free["Headroom (~5.5 GB): KV Caches + Linux Page Cache"]
+        N1_Free["Ubuntu Desktop + Tailscale (~1.74 GB) + Free Headroom (~3.14 GB)"]
     end
 
     subgraph Node02["node02 - Worker (192.168.9.135 | 14.88 GB DDR5)"]
         direction TB
-        N2_P["P-Cores (CPUs 0-15, -t 8): llama-server Tier 3 (14B ~9.0 GB + 0.6B Draft ~0.5 GB)"]
+        N2_P["P-Cores (CPUs 0-15, -t 8): llama-server Tier 3 (14B ~9.0 GB + 0.6B Draft + KV ~1.0 GB)"]
         N2_E["E-Cores (CPUs 16-19): Node Exporter + Optional On-Demand SD 1.5 LCM (~2.5 GB when invoked)"]
-        N2_Free["Headroom (~4.4 GB idle / ~1.9 GB with SD): KV Cache + OS"]
+        N2_Free["Ubuntu Desktop + Tailscale (~1.75 GB) + Free Headroom (~3.13 GB idle)"]
     end
 
     Node01 <-->|"100 Mbps LAN (HTTP/SSE + Metrics Only)"| Node02
@@ -171,27 +171,29 @@ flowchart LR
 
 ### Memory Allocation Summary
 
+Based on the measured `13.14 GB` available RAM with Ubuntu Desktop + Tailscale already running (`~1.74 GB` OS baseline):
+
 | Node | Component | RAM Budget | Notes |
 | :--- | :--- | :--- | :--- |
-| **`node01`** | Ubuntu Headless OS + `systemd` | `~0.6 GB` | Desktop GUI disabled via `multi-user.target` |
-| **`node01`** | Docker Infra (`Open WebUI`, `Gateway`, `Redis`, `SearXNG`, `Caddy`, `Prom/Grafana`) | `~1.8 GB` | Pinned to E-cores (`cpuset: "16-19"`) |
-| **`node01`** | `Qwen3-4B` (`Q4_K_M`) + KV (`q8_0`) | `~2.8 GB` | Always hot in RAM |
-| **`node01`** | `Qwen3-8B` (`Q4_K_M`) + KV (`q8_0`) | `~5.4 GB` | Always hot in RAM; serialized via Gateway semaphore |
-| **`node01`** | **Free Headroom / Page Cache** | **`~4.2 GB`** | Zero swap thrashing |
-| **`node02`** | Ubuntu Headless OS + `Node Exporter` | `~0.6 GB` | Pure compute worker |
-| **`node02`** | `Qwen3-14B` (`Q4_K_M`) + `Qwen3-0.6B` Draft + KV (`q8_0`) | `~10.0 GB` | Dedicated to Node 02 P-cores |
-| **`node02`** | **Free Headroom** | **`~4.2 GB`** | Safely absorbs long-context KV caches or on-demand `SD 1.5 LCM` |
+| **`node01`** | Ubuntu Desktop + Tailscale + `systemd` | `~1.74 GB` | Measured baseline (`14.88 - 13.14 GB`); GUI left intact for safe remote ops |
+| **`node01`** | Docker Infra (`Open WebUI`, `Gateway`, `Redis`, `SearXNG`, `Caddy`, `Prom/Grafana`) | `~1.80 GB` | Pinned to E-cores (`cpuset: "16-19"`) |
+| **`node01`** | `Qwen3-4B` (`Q4_K_M`) + KV (`q8_0`) | `~2.80 GB` | Always hot in RAM |
+| **`node01`** | `Qwen3-8B` (`Q4_K_M`) + KV (`q8_0`) | `~5.40 GB` | Always hot in RAM; serialized via Gateway semaphore |
+| **`node01`** | **Free Headroom / Page Cache** | **`~3.14 GB`** | Zero swap thrashing |
+| **`node02`** | Ubuntu Desktop + Tailscale + `Node Exporter` | `~1.75 GB` | Pure compute worker managed over Tailscale SSH |
+| **`node02`** | `Qwen3-14B` (`Q4_K_M`) + `Qwen3-0.6B` Draft + KV (`q8_0`) | `~10.00 GB` | Dedicated to Node 02 P-cores |
+| **`node02`** | **Free Headroom** | **`~3.13 GB`** | Safely absorbs long-context KV caches or on-demand `SD 1.5 LCM` |
 
 ---
 
 ## 6. Phased Implementation Roadmap ("What After What")
 
-Follow this exact build order so each layer is verified before the next depends on it:
+All deployment and administration happens remotely over **Tailscale SSH** from home, so every step avoids risky network/display-manager changes that could drop remote connectivity:
 
-1. **Phase 0 — OS & Hardware Prep (Both Nodes)**
-   * Verify exact P-core/E-core CPU IDs (`lscpu -e`) and NIC/DNS static IPs (`192.168.9.136`, `192.168.9.135`).
-   * Switch Ubuntu Desktop to headless server target (`sudo systemctl set-default multi-user.target`) to save ~1.5 GB RAM per node while keeping GUI packages intact if ever needed.
-   * Tune `vm.swappiness=1` and set CPU governor to `performance` during inference.
+1. **Phase 0 — Remote-Safe OS & Hardware Prep (Both Nodes via Tailscale SSH)**
+   * Verify exact P-core/E-core CPU IDs (`lscpu -e`) and keep existing LAN IPs (`192.168.9.136`, `192.168.9.135`) + Tailscale IPs untouched.
+   * Keep Ubuntu Desktop intact (`13.14 GB` free RAM is plenty); mask sleep/suspend targets (`sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target`) so GNOME never puts the lab PCs to sleep.
+   * Tune `vm.swappiness=1` so model weights stay pinned in RAM instead of swapping.
 2. **Phase 1 — Bare-Metal Inference Engines (`node01` & `node02`)**
    * Compile `llama.cpp` natively on each machine (`cmake -B build -DGGML_NATIVE=ON`).
    * Download `Qwen3-4B`, `Qwen3-8B`, and `Qwen3-14B` (`Q4_K_M` GGUFs) + `Qwen3-0.6B` draft model.
