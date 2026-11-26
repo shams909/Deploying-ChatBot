@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from app.config import settings
 from app.memory import delete_memories, handle_memory_command, list_memories
 from app.router import ModelTier, apply_dynamic_steering, route_request
-from app.web_search import extract_clean_text, needs_image_search, needs_web_search
+from app.web_search import clean_image_query, extract_clean_text, needs_image_search, needs_web_search
 
 
 def test_frontier_prompt_injects_date_and_skips_slang_and_clipped_greetings(monkeypatch):
@@ -35,7 +35,11 @@ def test_web_search_and_image_intent_detection():
     assert needs_web_search("hey") is False
 
     assert needs_image_search("Show me a photo of a server rack") is True
+    assert needs_image_search("an image of an tesla car") is True
+    assert needs_image_search("show me the face of mark zuck") is True
     assert needs_image_search("Draw an architecture diagram of Redis") is False
+    assert clean_image_query("show me an image of a tesla") == "tesla"
+    assert clean_image_query("an image of a server rack") == "server rack"
 
 
 def test_html_text_extractor_strips_scripts_and_tags():

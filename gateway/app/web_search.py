@@ -21,10 +21,20 @@ _WEB_INTENT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _IMAGE_INTENT_PATTERN = re.compile(
-    r"\b(show me (a |an )?(photo|picture|image|pic)|find (a |an )?(photo|picture|image)|"
-    r"what does .+ look like|photos of|pictures of|images of)\b",
+    r"\b(show\s+me\s+(?:a|an|the)?\s*(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces)|"
+    r"find\s+(?:a|an|the)?\s*(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces)|"
+    r"(?:a|an|the)?\s*(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces)\s+of|"
+    r"what\s+does\s+.+\s+look\s+like)\b",
     re.IGNORECASE,
 )
+_IMAGE_PREFIX_STRIP = re.compile(
+    r"^(?:please\s+)?(?:show\s+me|find|give\s+me|get\s+me)?\s*"
+    r"(?:a|an|the)?\s*(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces)\s+of\s+",
+    re.IGNORECASE,
+)
+_BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+}
 _DIAGRAM_EXCLUSION = re.compile(
     r"\b(diagram|flowchart|sequence diagram|class diagram|er diagram|mermaid|mindmap)\b",
     re.IGNORECASE,
@@ -98,11 +108,36 @@ async def _fetch_page_excerpt(client: httpx.AsyncClient, url: str) -> str:
     return ""
 
 
+def clean_image_query(user_text: str) -> str:
+    cleaned = _IMAGE_PREFIX_STRIP.sub("", user_text.strip())
+    cleaned = re.sub(r"^(?:a|an|the)\s+", "", cleaned, flags=re.IGNORECASE)
+    return cleaned[:150].strip() or user_text[:150].strip()
+
+
+async def _verify_image_url(client: httpx.AsyncClient, url: str) -> bool:
+    if not url or not url.startswith(("http://", "https://")):
+        return False
+    try:
+        head = await client.head(url, headers=_BROWSER_HEADERS, timeout=2.5, follow_redirects=True)
+        if head.status_code == 200 and head.headers.get("content-type", "").lower().startswith("image/"):
+            return True
+    except Exception:
+        pass
+    try:
+        async with client.stream("GET", url, headers=_BROWSER_HEADERS, timeout=3.0, follow_redirects=True) as resp:
+            if resp.status_code == 200 and resp.headers.get("content-type", "").lower().startswith("image/"):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 async def search_verified_images(client: httpx.AsyncClient, query: str, limit: int = 3) -> list[dict[str, str]]:
+    clean_q = clean_image_query(query)
     try:
         resp = await client.get(
             f"{settings.searxng_url}/search",
-            params={"q": query, "categories": "images", "format": "json"},
+            params={"q": clean_q, "categories": "images", "format": "json"},
             timeout=5.0,
         )
         resp.raise_for_status()
@@ -112,30 +147,26 @@ async def search_verified_images(client: httpx.AsyncClient, query: str, limit: i
         return []
 
     verified: list[dict[str, str]] = []
-    for item in results:
+    for item in results[:12]:
         if len(verified) >= limit:
             break
-        img_url = item.get("img_src") or item.get("url")
-        if not img_url or not str(img_url).startswith(("http://", "https://")):
-            continue
-        try:
-            head = await client.head(img_url, timeout=2.0, follow_redirects=True)
-            ctype = head.headers.get("content-type", "")
-            if head.status_code == 200 and ctype.startswith("image/"):
-                verified.append({"title": str(item.get("title") or query), "image_url": str(img_url), "source": str(item.get("url") or "")})
-        except Exception:
-            continue
+        candidates = [str(item.get("img_src") or ""), str(item.get("thumbnail_src") or "")]
+        for candidate in candidates:
+            if await _verify_image_url(client, candidate):
+                verified.append({"title": str(item.get("title") or clean_q), "image_url": candidate, "source": str(item.get("url") or "")})
+                break
     return verified
 
 
-async def gather_web_context(client: httpx.AsyncClient, user_text: str) -> tuple[str | None, bool]:
-    """Run SearXNG web and/or image lookup if triggered; returns (context_block, used_web)."""
+async def gather_web_context(client: httpx.AsyncClient, user_text: str) -> tuple[str | None, list[dict[str, str]], bool]:
+    """Run SearXNG web and/or image lookup if triggered; returns (context_block, verified_images, used_web)."""
     do_web = needs_web_search(user_text)
     do_img = needs_image_search(user_text)
     if not do_web and not do_img:
-        return None, False
+        return None, [], False
 
     sections: list[str] = []
+    verified_images: list[dict[str, str]] = []
     if do_web:
         try:
             resp = await client.get(
@@ -163,13 +194,15 @@ async def gather_web_context(client: httpx.AsyncClient, user_text: str) -> tuple
             logger.warning("Auto web search failed: %s", exc)
 
     if do_img:
-        images = await search_verified_images(client, user_text[:150], limit=2)
-        if images:
-            img_lines = [f"- {im['title']}: {im['image_url']}" for im in images]
+        verified_images = await search_verified_images(client, user_text, limit=3)
+        if verified_images:
+            img_lines = [f"- {im['title']}: {im['image_url']}" for im in verified_images]
             sections.append(
-                "Verified image URLs you may embed directly using Markdown ![caption](url):\n" + "\n".join(img_lines)
+                "You CAN display images directly in chat using Markdown ![caption](url). "
+                "Do NOT say you cannot display images. Embed relevant verified image URLs from this list:\n"
+                + "\n".join(img_lines)
             )
 
     if not sections:
-        return None, False
-    return "\n\n".join(sections), True
+        return None, [], False
+    return "\n\n".join(sections), verified_images, True

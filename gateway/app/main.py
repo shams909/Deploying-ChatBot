@@ -229,11 +229,12 @@ async def chat_completions(
     is_single_turn = user_turns == 1 and not decision.is_internal_task
 
     web_context: str | None = None
+    verified_images: list[dict[str, str]] = []
     used_web = False
     recalled_memory: str | None = None
 
     if not decision.is_internal_task:
-        (web_context, used_web), recalled_memory = await asyncio.gather(
+        (web_context, verified_images, used_web), recalled_memory = await asyncio.gather(
             gather_web_context(backend_manager.client, user_prompt),
             recall_memories(user_id, user_prompt),
         )
@@ -284,6 +285,7 @@ async def chat_completions(
                 is_cacheable=is_cacheable,
                 temperature=req.temperature,
                 cache_status=cache_status,
+                verified_images=verified_images,
             ),
             media_type="text/event-stream",
         )
@@ -293,6 +295,7 @@ async def chat_completions(
     try:
         data = await _call_non_streaming(target_url, upstream_payload, decision.target_tier)
         content = data["choices"][0]["message"].get("content", "")
+        content = _append_missing_images(content, verified_images)
         output_tokens = int(data.get("usage", {}).get("completion_tokens", max(1, len(content) // 4)))
         TOKEN_COUNTER.labels(tier=decision.target_tier.value).inc(output_tokens)
         await cache_manager.store_response(decision.target_tier.value, user_prompt, content, is_cacheable, req.temperature)
@@ -327,6 +330,19 @@ async def _call_non_streaming(url: str, payload: dict[str, Any], tier: ModelTier
         NODE2_QUEUE_GAUGE.set(backend_manager.node2_state.queue_depth)
 
 
+def _format_image_gallery(verified_images: list[dict[str, str]]) -> str:
+    if not verified_images:
+        return ""
+    lines = [f"![{im['title']}]({im['image_url']})" for im in verified_images[:3]]
+    return "\n\n" + "\n\n".join(lines)
+
+
+def _append_missing_images(content: str, verified_images: list[dict[str, str]]) -> str:
+    if not verified_images or "![" in content:
+        return content
+    return content + _format_image_gallery(verified_images)
+
+
 async def _stream_upstream(
     target_url: str,
     upstream_payload: dict[str, Any],
@@ -339,6 +355,7 @@ async def _stream_upstream(
     is_cacheable: bool,
     temperature: float,
     cache_status: str,
+    verified_images: list[dict[str, str]] | None = None,
 ) -> AsyncIterator[str]:
     start_ts = time.perf_counter()
     first_token_ts: float | None = None
@@ -358,6 +375,11 @@ async def _stream_upstream(
                     continue
                 raw = line[5:].strip()
                 if raw == "[DONE]":
+                    full_so_far = "".join(collected_parts)
+                    if verified_images and "![" not in full_so_far:
+                        gallery = _format_image_gallery(verified_images)
+                        collected_parts.append(gallery)
+                        yield _sse_chunk(chunk_id, req_model, content=gallery)
                     yield "data: [DONE]\n\n"
                     break
                 try:
