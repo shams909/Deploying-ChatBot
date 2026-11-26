@@ -33,6 +33,7 @@ from app.router import (
     apply_dynamic_steering,
     extract_last_user_text,
     has_image_attachments,
+    resolve_repetition_params,
     resolve_sampling_params,
     route_request,
     strip_image_attachments,
@@ -323,6 +324,7 @@ async def chat_completions(
         verified_images = tool_images
         WEB_SEARCH_COUNTER.inc()
 
+    is_grounded_final = bool(url_context or want_web or verified_images)
     if verified_images:
         eff_temp, eff_presence = resolve_sampling_params(
             req.temperature,
@@ -330,6 +332,7 @@ async def chat_completions(
             decision,
             is_grounded=True,
         )
+    freq_penalty, repeat_penalty, min_p = resolve_repetition_params(decision, is_grounded=is_grounded_final)
 
     upstream_payload = {
         "model": decision.target_tier.value,
@@ -337,7 +340,10 @@ async def chat_completions(
         "stream": req.stream,
         "temperature": eff_temp,
         "top_p": req.top_p,
+        "min_p": min_p,
         "presence_penalty": eff_presence,
+        "frequency_penalty": freq_penalty,
+        "repeat_penalty": repeat_penalty,
         "max_tokens": decision.max_tokens,
         "chat_template_kwargs": {"enable_thinking": decision.enable_thinking},
     }

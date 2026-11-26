@@ -5,6 +5,7 @@ from app.router import (
     BudgetClass,
     ModelTier,
     apply_dynamic_steering,
+    resolve_repetition_params,
     resolve_sampling_params,
     route_request,
 )
@@ -216,3 +217,7 @@ def test_multiturn_conversational_chat_promotes_to_reasoning(monkeypatch):
     assert decision.reason == "auto-conversational-depth"
     assert decision.recommended_temperature == 0.82
     assert decision.recommended_presence_penalty == 0.25
+    freq, rep, min_p = resolve_repetition_params(decision, is_grounded=False)
+    assert freq == 0.15
+    assert rep == 1.12
+    assert min_p == 0.05

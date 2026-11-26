@@ -19,11 +19,29 @@ from app.router import ModelTier, semantic_scorer
 logger = logging.getLogger("labai.memory")
 
 _MEM_KEY_PREFIX = "labai:memory:"
+_MEM_DISABLED_PREFIX = "labai:memory:disabled:"
 _FORGET_PHRASE = re.compile(r"^(?:please\s+)?forget\s+(?:everything|all(?:\s+memories)?)\s*(?:you\s+remember\s+about\s+me)?[.!]?$", re.IGNORECASE)
 
 
 def _mem_key(user_id: str) -> str:
     return f"{_MEM_KEY_PREFIX}{user_id}"
+
+
+def _mem_disabled_key(user_id: str) -> str:
+    return f"{_MEM_DISABLED_PREFIX}{user_id}"
+
+
+async def is_memory_enabled(user_id: str) -> bool:
+    """Return True unless the user has explicitly paused long-term memory."""
+    if not settings.enable_long_term_memory:
+        return False
+    redis = cache_manager.redis
+    if redis is None:
+        return True
+    try:
+        return not bool(await redis.get(_mem_disabled_key(user_id)))
+    except Exception:
+        return True
 
 
 async def list_memories(user_id: str) -> list[dict[str, Any]]:
@@ -59,25 +77,47 @@ async def delete_memories(user_id: str, chat_id: str | None = None) -> int:
 
 
 async def handle_memory_command(user_id: str, user_text: str) -> str | None:
-    """Handle /memory commands or explicit forget requests directly without calling the LLM."""
+    """Handle memory commands (/memory, !memory, or plain 'memory ...') directly without calling the LLM."""
     text = user_text.strip()
     lower = text.lower()
+    norm = lower[1:] if lower.startswith(("/", "!")) else lower
 
-    if lower in ("/memory", "/memory list"):
+    if norm in ("memory", "memory list"):
+        enabled = await is_memory_enabled(user_id)
+        status = "ON" if enabled else "OFF (paused)"
         items = await list_memories(user_id)
         if not items:
-            return "No cross-chat memories are saved for your account yet."
+            return (
+                f"No cross-chat memories are saved for your account yet (Memory status: **{status}**).\n\n"
+                "*Commands: `memory`, `memory clear`, `memory off`, `memory on`*"
+            )
         lines = [f"{idx}. {it['fact']}" for idx, it in enumerate(items, start=1)]
-        return "**Saved Cross-Chat Memories:**\n" + "\n".join(lines) + "\n\n*Use `/memory delete <number>` or `/memory clear` anytime.*"
+        return (
+            f"**Saved Cross-Chat Memories ({status}):**\n"
+            + "\n".join(lines)
+            + "\n\n*Use `memory delete <number>`, `memory clear`, `memory off`, or `memory on` anytime.*"
+        )
 
-    if lower in ("/memory clear", "/memory reset") or _FORGET_PHRASE.match(text):
+    if norm in ("memory clear", "memory reset") or _FORGET_PHRASE.match(text):
         count = await delete_memories(user_id)
         return f"Cleared {count} saved cross-chat {'memory' if count == 1 else 'memories'}."
 
-    if lower.startswith("/memory delete "):
+    if norm in ("memory off", "memory disable"):
+        redis = cache_manager.redis
+        if redis is not None:
+            await redis.set(_mem_disabled_key(user_id), "1")
+        return "Cross-chat memory is now **OFF** for your account (`memory on` to re-enable, `memory clear` to wipe saved items)."
+
+    if norm in ("memory on", "memory enable"):
+        redis = cache_manager.redis
+        if redis is not None:
+            await redis.delete(_mem_disabled_key(user_id))
+        return "Cross-chat memory is now **ON** for your account (`memory off` to pause anytime)."
+
+    if norm.startswith("memory delete "):
         arg = text.split(None, 2)[-1].strip()
         if not arg.isdigit():
-            return "Usage: `/memory delete <number>` (run `/memory` first to see numbers)."
+            return "Usage: `memory delete <number>` (send `memory` first to see numbers)."
         idx = int(arg) - 1
         items = await list_memories(user_id)
         if idx < 0 or idx >= len(items):
@@ -98,14 +138,37 @@ _MEMORY_STOPWORDS = frozenset({
     "have", "has", "had", "not", "but", "can", "will", "just", "like", "what", "when",
     "where", "who", "how", "why", "from", "about", "into", "they", "them", "then",
 })
+_MEMORY_QUERY_PATTERN = re.compile(
+    r"\b(?:what\s+do\s+(?:you|u)\s+(?:remem?ber|know)\s+(?:about|bout)\s+me"
+    r"|do\s+(?:you|u)\s+remem?ber\s+(?:me|anything)"
+    r"|what\s+(?:have|do)\s+(?:you|u)\s+(?:saved|stored)\s+(?:about|bout)\s+me)\b",
+    re.IGNORECASE,
+)
 
 
 async def recall_memories(user_id: str, query_text: str) -> str | None:
-    if not settings.enable_long_term_memory or not query_text.strip():
+    if not query_text.strip():
+        return None
+    is_meta_recall = bool(_MEMORY_QUERY_PATTERN.search(query_text))
+    if not await is_memory_enabled(user_id):
+        if is_meta_recall:
+            return (
+                "Memory status: Cross-chat memory is currently turned OFF for this user. "
+                "Answer honestly that nothing is saved or remembered from past chats—do NOT invent shared memories."
+            )
         return None
     items = await list_memories(user_id)
     if not items:
+        if is_meta_recall:
+            return (
+                "Memory status: No personal facts are saved about this user from past chats yet. "
+                "Answer honestly that nothing is saved yet—do NOT invent fake past memories or stories."
+            )
         return None
+    if is_meta_recall:
+        return "Facts saved about this user from past chats:\n" + "\n".join(
+            f"- {it['fact']}" for it in items[: settings.memory_recall_top_k]
+        )
 
     query_vec = semantic_scorer.embed(query_text[:600])
     selected: list[str] = []
@@ -142,10 +205,10 @@ async def extract_and_save_memories(user_id: str, chat_id: str | None, user_text
     """Background task using Tier 1 (Fast 4B) to extract durable user facts after a substantive turn."""
     redis = cache_manager.redis
     if (
-        not settings.enable_long_term_memory
-        or redis is None
+        redis is None
         or len(user_text.strip()) < 25
-        or user_text.strip().startswith("/")
+        or user_text.strip().startswith(("/", "!"))
+        or not await is_memory_enabled(user_id)
     ):
         return
 

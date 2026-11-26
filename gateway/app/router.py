@@ -422,6 +422,19 @@ def resolve_sampling_params(
     return eff_temp, eff_presence
 
 
+def resolve_repetition_params(
+    decision: RoutingDecision,
+    is_grounded: bool = False,
+) -> tuple[float, float, float]:
+    """Return (frequency_penalty, repeat_penalty, min_p) to prevent token loops on small GGUF models."""
+    if is_grounded or decision.inject_mermaid_hint or decision.budget_class == BudgetClass.DEEP:
+        return 0.0, 1.05, 0.05
+    if decision.recommended_presence_penalty >= 0.2:
+        # Conversational/roleplay chat needs stronger repeat damping to avoid 'a bit of a bit of' loops
+        return 0.15, 1.12, 0.05
+    return 0.05, 1.08, 0.05
+
+
 def apply_dynamic_steering(
     messages: list[dict[str, Any]],
     decision: RoutingDecision,

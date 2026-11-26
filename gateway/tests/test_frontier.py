@@ -80,6 +80,13 @@ def test_html_text_extractor_strips_scripts_and_tags():
 class _FakeRedis:
     def __init__(self) -> None:
         self.store: dict[str, list[str]] = {}
+        self.kv: dict[str, str] = {}
+
+    async def get(self, key: str) -> str | None:
+        return self.kv.get(key)
+
+    async def set(self, key: str, value: str) -> None:
+        self.kv[key] = value
 
     async def lrange(self, key: str, start: int, end: int) -> list[str]:
         items = self.store.get(key, [])
@@ -87,6 +94,7 @@ class _FakeRedis:
 
     async def delete(self, key: str) -> None:
         self.store.pop(key, None)
+        self.kv.pop(key, None)
 
     async def rpush(self, key: str, *values: str) -> None:
         self.store.setdefault(key, []).extend(values)
@@ -131,6 +139,22 @@ def test_memory_commands_and_chat_scoped_deletion(monkeypatch):
         assert await recall_memories("u1", "hey babe miss you") is None
         recalled = await recall_memories("u1", "update my redis diagram")
         assert recalled is not None and "Redis diagram" in recalled
+
+        # Plain-text and bang memory commands avoid OpenWebUI's '/' prompt popup and can pause memory
+        assert "Redis diagram" in (await handle_memory_command("u1", "memory") or "")
+        off_msg = await handle_memory_command("u1", "memory off")
+        assert off_msg is not None and "OFF" in off_msg
+        assert await recall_memories("u1", "update my redis diagram") is None
+        on_msg = await handle_memory_command("u1", "!memory on")
+        assert on_msg is not None and "ON" in on_msg
+        assert await recall_memories("u1", "update my redis diagram") is not None
+
+        # Explicit recall questions ("what do u remember bout me") surface saved facts or honest empty status
+        meta_saved = await recall_memories("u1", "what do u remeber bout me")
+        assert meta_saved is not None and "Redis diagram" in meta_saved
+        await delete_memories("u1")
+        meta_empty = await recall_memories("u1", "what do u remeber bout me")
+        assert meta_empty is not None and "No personal facts are saved" in meta_empty
 
     asyncio.run(run())
 
