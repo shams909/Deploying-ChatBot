@@ -119,7 +119,7 @@ class CacheAndQuotaManager:
         except Exception as exc:
             logger.debug("Cache store error: %s", exc)
 
-    async def check_and_acquire_user_slot(self, user_id: str) -> tuple[bool, str | None]:
+    async def check_and_acquire_user_slot(self, user_id: str, max_active: int = 2) -> tuple[bool, str | None]:
         if self._redis is None:
             return True, None
         try:
@@ -130,9 +130,12 @@ class CacheAndQuotaManager:
                 return False, f"Token quota reached ({used}/{settings.user_token_quota}). Resets in {max(ttl, 1)}s."
 
             active_key = f"{_ACTIVE_PREFIX}{user_id}"
-            acquired = await self._redis.set(active_key, str(time.time()), nx=True, ex=180)
-            if not acquired:
-                return False, "You already have an active generation in progress. Please wait for it to finish."
+            count = int(await self._redis.incr(active_key))
+            if count == 1:
+                await self._redis.expire(active_key, 120)
+            if count > max_active:
+                await self._redis.decr(active_key)
+                return False, "You already have active generations in progress. Please wait a moment."
             return True, None
         except Exception as exc:
             logger.debug("Quota check error: %s", exc)
@@ -142,7 +145,10 @@ class CacheAndQuotaManager:
         if self._redis is None:
             return
         try:
-            await self._redis.delete(f"{_ACTIVE_PREFIX}{user_id}")
+            active_key = f"{_ACTIVE_PREFIX}{user_id}"
+            remaining = int(await self._redis.decr(active_key))
+            if remaining <= 0:
+                await self._redis.delete(active_key)
             if output_tokens > 0:
                 quota_key = f"{_QUOTA_PREFIX}{user_id}"
                 pipe = self._redis.pipeline()

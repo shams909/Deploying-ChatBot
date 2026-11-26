@@ -27,6 +27,7 @@ services:
       - OPENAI_API_BASE_URL=http://gateway:8000/v1
       - OPENAI_API_KEY=labai-local-key
       - ENABLE_OLLAMA_API=false
+      - ENABLE_FORWARD_USER_INFO_HEADERS=true
       - ENABLE_RAG_WEB_SEARCH=true
       - RAG_WEB_SEARCH_ENGINE=searxng
       - SEARXNG_QUERY_URL=http://searxng:8080/search?q=<query>

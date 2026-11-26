@@ -62,3 +62,18 @@ def test_diagram_intent_injects_mermaid_rule(monkeypatch):
     steered = apply_dynamic_steering([{"role": "user", "content": "Draw an architecture diagram"}], decision)
     assert steered[0]["role"] == "system"
     assert "mermaid" in steered[0]["content"].lower()
+
+
+def test_openwebui_internal_task_routes_to_fast_without_badge(monkeypatch):
+    monkeypatch.setattr(settings, "enable_semantic_embedder", False)
+    prompt = "### Task:\nGenerate a concise, 3-5 word title with an emoji summarizing the chat history."
+    decision = route_request(
+        requested_model="labai-pro",
+        messages=[{"role": "user", "content": prompt}],
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=0,
+    )
+    assert decision.is_internal_task is True
+    assert decision.target_tier == ModelTier.FAST
+    assert decision.enable_thinking is False

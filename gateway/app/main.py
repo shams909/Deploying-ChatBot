@@ -157,7 +157,7 @@ async def image_search(q: str = Query(..., min_length=2), limit: int = Query(def
 
 
 def _routing_badge(decision: RoutingDecision, cache_status: str) -> str:
-    if not settings.enable_routing_badge:
+    if not settings.enable_routing_badge or decision.is_internal_task:
         return ""
     tier_label = {
         ModelTier.FAST: "Fast (4B)",
@@ -174,11 +174,6 @@ async def chat_completions(
     request: Request,
     x_openwebui_user_id: str | None = Header(default=None),
 ):
-    user_id = req.user or x_openwebui_user_id or (request.client.host if request.client else "anonymous")
-    allowed, deny_reason = await cache_manager.check_and_acquire_user_slot(user_id)
-    if not allowed:
-        raise HTTPException(status_code=429, detail=deny_reason)
-
     decision = route_request(
         requested_model=req.model,
         messages=req.messages,
@@ -187,8 +182,14 @@ async def chat_completions(
         node2_queue_depth=backend_manager.node2_state.queue_depth,
     )
 
+    user_id = req.user or x_openwebui_user_id or (request.client.host if request.client else "anonymous")
+    if not decision.is_internal_task:
+        allowed, deny_reason = await cache_manager.check_and_acquire_user_slot(user_id)
+        if not allowed:
+            raise HTTPException(status_code=429, detail=deny_reason)
+
     user_turns = sum(1 for m in req.messages if m.get("role") == "user")
-    is_single_turn = user_turns == 1
+    is_single_turn = user_turns == 1 and not decision.is_internal_task
     user_prompt = extract_last_user_text(req.messages)
 
     cached_text, cache_status = await cache_manager.lookup_response(
@@ -203,7 +204,8 @@ async def chat_completions(
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
 
     if cached_text is not None:
-        await cache_manager.release_user_slot_and_record_tokens(user_id, 0)
+        if not decision.is_internal_task:
+            await cache_manager.release_user_slot_and_record_tokens(user_id, 0)
         badge = _routing_badge(decision, cache_status)
         full_cached = f"{badge}{cached_text}"
         if req.stream:
@@ -261,7 +263,8 @@ async def chat_completions(
         data["model"] = req.model
         return data
     finally:
-        await cache_manager.release_user_slot_and_record_tokens(user_id, output_tokens)
+        if not decision.is_internal_task:
+            await cache_manager.release_user_slot_and_record_tokens(user_id, output_tokens)
 
 
 async def _call_non_streaming(url: str, payload: dict[str, Any], tier: ModelTier) -> dict[str, Any]:
@@ -367,4 +370,5 @@ async def _stream_upstream(
         yield _sse_chunk(chunk_id, req_model, content=f"\n\n[Gateway Error: {exc}]", finish_reason="stop")
         yield "data: [DONE]\n\n"
     finally:
-        await cache_manager.release_user_slot_and_record_tokens(user_id, token_count)
+        if not decision.is_internal_task:
+            await cache_manager.release_user_slot_and_record_tokens(user_id, token_count)

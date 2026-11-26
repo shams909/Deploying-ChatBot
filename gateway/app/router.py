@@ -50,6 +50,10 @@ _QUICK_PATTERN = re.compile(
     r"^(hi|hello|hey|thanks|thank you|ok|who are you|what is|define|translate|summarize briefly)\b",
     re.IGNORECASE,
 )
+_INTERNAL_TASK_PATTERN = re.compile(
+    r"(^|\n)###\s*Task:\s*\n|Generate a concise, 3-5 word title|Generate 1-3 broad tags|suggest 3-5 relevant follow-up",
+    re.IGNORECASE,
+)
 
 _ANCHOR_PROTOTYPES = {
     "simple": [
@@ -138,6 +142,11 @@ class RoutingDecision:
     complexity_score: float
     fallback_applied: bool
     reason: str
+    is_internal_task: bool = False
+
+
+def is_internal_webui_task(user_text: str) -> bool:
+    return bool(_INTERNAL_TASK_PATTERN.search(user_text))
 
 
 def extract_last_user_text(messages: list[dict[str, Any]]) -> str:
@@ -187,6 +196,20 @@ def route_request(
     node2_queue_depth: int,
 ) -> RoutingDecision:
     user_text = extract_last_user_text(messages)
+    if is_internal_webui_task(user_text):
+        return RoutingDecision(
+            requested_model=requested_model,
+            target_tier=ModelTier.FAST,
+            budget_class=BudgetClass.QUICK,
+            max_tokens=min(int(explicit_max_tokens), 512) if explicit_max_tokens else 256,
+            enable_thinking=False,
+            inject_mermaid_hint=False,
+            complexity_score=0.05,
+            fallback_applied=False,
+            reason="openwebui-internal-task",
+            is_internal_task=True,
+        )
+
     heur_score, has_code, has_deep, wants_diagram = compute_heuristic_complexity(messages, user_text)
 
     sem_score = semantic_scorer.complexity_score(user_text[:1000]) if user_text else None
