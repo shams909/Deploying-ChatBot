@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import re
+import socket
 from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import numpy as np
@@ -39,6 +42,20 @@ _CLOCK_ONLY_PATTERN = re.compile(
     r"^[\w\s,'?!.]*\b(what('?s| is)?\s+(the\s+)?(today('?s)?|current\s+)?(date|time|day)|today('?s)?\s+date)\b[\w\s,'?!.]*$",
     re.IGNORECASE,
 )
+_URL_PATTERN = re.compile(r"https?://[^\s<>\"'\]\)]+", re.IGNORECASE)
+_INTERNAL_HOSTS = {
+    "localhost",
+    "node01",
+    "node02",
+    "gateway",
+    "redis",
+    "searxng",
+    "open-webui",
+    "prometheus",
+    "grafana",
+    "caddy",
+    "host.docker.internal",
+}
 
 _IMAGE_PREFIX_STRIP = re.compile(
     r"^(?:please\s+)?(?:show\s+me|find|give\s+me|get\s+me|drop)?\s*"
@@ -147,9 +164,18 @@ class _TextExtractor(HTMLParser):
         super().__init__()
         self._skip_depth = 0
         self._chunks: list[str] = []
+        self._meta_parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() in {"script", "style", "noscript", "svg", "nav", "footer", "header"}:
+        lower = tag.lower()
+        if lower == "meta":
+            attr_map = {k.lower(): (v or "") for k, v in attrs}
+            key = (attr_map.get("property") or attr_map.get("name") or "").lower()
+            content = attr_map.get("content", "").strip()
+            if key in {"og:title", "og:description", "description", "twitter:title", "twitter:description"} and content:
+                if content not in self._meta_parts:
+                    self._meta_parts.append(content)
+        if lower in {"script", "style", "noscript", "svg", "nav", "footer", "header"}:
             self._skip_depth += 1
 
     def handle_endtag(self, tag: str) -> None:
@@ -163,7 +189,11 @@ class _TextExtractor(HTMLParser):
                 self._chunks.append(text)
 
     def get_text(self) -> str:
-        return re.sub(r"\s+", " ", " ".join(self._chunks)).strip()
+        body = re.sub(r"\s+", " ", " ".join(self._chunks)).strip()
+        if len(body) >= 120:
+            return body
+        meta = " — ".join(self._meta_parts).strip()
+        return f"{meta}\n{body}".strip() if meta else body
 
 
 def extract_clean_text(html_body: str, max_chars: int = 900) -> str:
@@ -215,17 +245,126 @@ def clean_image_query(user_text: str) -> str:
     return cleaned[:150].strip() or user_text[:150].strip()
 
 
-async def _fetch_page_excerpt(client: httpx.AsyncClient, url: str) -> str:
+async def _fetch_page_excerpt(client: httpx.AsyncClient, url: str, max_chars: int = 900, timeout: float = 2.5) -> str:
     if not url.startswith(("http://", "https://")):
         return ""
     try:
-        resp = await client.get(url, headers=_BROWSER_HEADERS, timeout=2.5, follow_redirects=True)
-        ctype = resp.headers.get("content-type", "")
-        if resp.status_code == 200 and "text/html" in ctype:
-            return extract_clean_text(resp.text, max_chars=900)
+        resp = await client.get(url, headers=_BROWSER_HEADERS, timeout=timeout, follow_redirects=True)
+        if resp.status_code != 200:
+            return ""
+        ctype = resp.headers.get("content-type", "").lower()
+        if "text/html" in ctype:
+            return extract_clean_text(resp.text, max_chars=max_chars)
+        if "text/plain" in ctype or "markdown" in ctype or "json" in ctype:
+            return resp.text.strip()[:max_chars]
     except Exception:
         return ""
     return ""
+
+
+def is_safe_public_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower().rstrip(".")
+    if host in _INTERNAL_HOSTS or host.endswith((".local", ".internal")):
+        return False
+    try:
+        addr = ipaddress.ip_address(host)
+        return not (addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_reserved)
+    except ValueError:
+        pass
+    try:
+        for info in socket.getaddrinfo(host, None):
+            ip_str = info[4][0]
+            addr = ipaddress.ip_address(ip_str)
+            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_reserved:
+                return False
+    except Exception:
+        # Allow DNS failure here; HTTP client will fail cleanly if unreachable
+        return True
+    return True
+
+
+def extract_urls(text: str, limit: int = 2) -> list[str]:
+    found: list[str] = []
+    for raw in _URL_PATTERN.findall(text):
+        cleaned = raw.rstrip(".,;:!?")
+        if cleaned not in found and is_safe_public_url(cleaned):
+            found.append(cleaned)
+        if len(found) >= limit:
+            break
+    return found
+
+
+def _special_url_candidates(url: str) -> list[str]:
+    """Return friendly raw/oEmbed endpoints for GitHub and public X/Twitter status URLs."""
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if host in {"x.com", "www.x.com", "twitter.com", "www.twitter.com"} and "/status/" in parsed.path:
+        from urllib.parse import quote
+        return [f"https://publish.twitter.com/oembed?url={quote(url, safe='')}"]
+    if host != "github.com":
+        return []
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) >= 4 and parts[2] == "blob":
+        owner, repo, _, branch = parts[:4]
+        rest = "/".join(parts[4:])
+        return [f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{rest}"]
+    if len(parts) >= 2:
+        owner, repo = parts[0], parts[1]
+        if len(parts) >= 4 and parts[2] == "tree":
+            branch = parts[3]
+            sub = "/".join(parts[4:])
+            prefix = f"{sub}/" if sub else ""
+            return [f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{prefix}README.md"]
+        return [f"https://raw.githubusercontent.com/{owner}/{repo}/main/README.md"]
+    return []
+
+
+async def fetch_prompt_urls(client: httpx.AsyncClient, user_text: str) -> str | None:
+    urls = extract_urls(user_text, limit=2)
+    if not urls:
+        return None
+
+    async def _fetch_one(url: str) -> str | None:
+        targets = _special_url_candidates(url) + [url]
+        chunks: list[str] = []
+        for target in targets:
+            text = await _fetch_page_excerpt(client, target, max_chars=2400, timeout=4.0)
+            if text:
+                if "publish.twitter.com/oembed" in target:
+                    try:
+                        oembed = json.loads(text)
+                        author = oembed.get("author_name", "")
+                        tweet_text = extract_clean_text(str(oembed.get("html", "")), max_chars=1500)
+                        text = f"Post by {author}: {tweet_text}".strip()
+                    except Exception:
+                        pass
+                chunks.append(f"[{target}]\n{text}")
+                if len("\n".join(chunks)) >= 2800:
+                    break
+        if chunks:
+            return "\n\n".join(chunks)
+
+        # Fallback to SearXNG indexed snippets if site blocked direct HTTP (login wall / JS-only)
+        pages = await search_web_pages(client, url, max_results=2)
+        if pages:
+            snippets = "\n".join(f"- {p['title']} ({p['url']}): {p['content']}" for p in pages)
+            return f"[Indexed search snippets for {url}]\n{snippets}"
+        return f"[{url}] Direct fetch blocked by site (login wall, JS-only, or anti-bot protection)."
+
+    fetched = [c for c in await asyncio.gather(*(_fetch_one(u) for u in urls)) if c]
+    if not fetched:
+        return None
+    return (
+        "Live content fetched from the URL(s) pasted by the user "
+        "(use this to analyze/answer; if a site blocked direct access, state that honestly instead of guessing):\n\n"
+        + "\n\n---\n\n".join(fetched)
+    )
 
 
 async def _verify_image_url(client: httpx.AsyncClient, url: str) -> bool:

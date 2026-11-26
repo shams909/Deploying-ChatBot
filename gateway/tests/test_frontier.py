@@ -6,9 +6,12 @@ from app.config import settings
 from app.memory import delete_memories, handle_memory_command, list_memories
 from app.router import ModelTier, apply_dynamic_steering, route_request
 from app.web_search import (
+    _special_url_candidates,
     clean_image_query,
     execute_tool_calls,
     extract_clean_text,
+    extract_urls,
+    is_safe_public_url,
     needs_image_search,
     needs_web_search,
 )
@@ -129,3 +132,23 @@ def test_execute_tool_calls_dispatches_multiple_subjects(monkeypatch):
         assert seen_queries == ["Mark Zuckerberg", "Jensen Huang", "Python 2026 release"]
 
     asyncio.run(run())
+
+
+def test_url_extraction_ssrf_guard_and_github_raw_mapping():
+    assert is_safe_public_url("http://127.0.0.1:8081/health") is False
+    assert is_safe_public_url("http://192.168.9.135:8083") is False
+    assert is_safe_public_url("http://node01/admin") is False
+    assert is_safe_public_url("https://github.com/shams909/Research/tree/main/CPU%20Cluster") is True
+
+    urls = extract_urls("analyze https://github.com/shams909/Research/tree/main/CPU%20Cluster and http://127.0.0.1:8000")
+    assert urls == ["https://github.com/shams909/Research/tree/main/CPU%20Cluster"]
+    raw = _special_url_candidates(urls[0])
+    assert raw == ["https://raw.githubusercontent.com/shams909/Research/main/CPU%20Cluster/README.md"]
+    tweet_oembed = _special_url_candidates("https://x.com/OpenAI/status/123456")
+    assert len(tweet_oembed) == 1 and "publish.twitter.com/oembed" in tweet_oembed[0]
+
+
+def test_html_meta_og_fallback_for_js_pages():
+    html = '<html><head><meta property="og:title" content="Breaking Tech News"><meta property="og:description" content="Summary of article."></head><body><div id="app"></div></body></html>'
+    extracted = extract_clean_text(html)
+    assert "Breaking Tech News" in extracted and "Summary of article." in extracted

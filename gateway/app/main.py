@@ -36,6 +36,8 @@ from app.router import (
 from app.web_search import (
     TOOLS_SCHEMA,
     execute_tool_calls,
+    extract_urls,
+    fetch_prompt_urls,
     gather_web_context,
     might_need_tools,
     search_verified_images,
@@ -236,15 +238,23 @@ async def chat_completions(
 
     want_web = False
     want_img = False
+    has_urls = False
     recalled_memory: str | None = None
+    url_context: str | None = None
 
     if not decision.is_internal_task:
         want_web, want_img = might_need_tools(user_prompt)
-        recalled_memory = await recall_memories(user_id, user_prompt)
+        has_urls = bool(extract_urls(user_prompt))
+        recalled_memory, url_context = await asyncio.gather(
+            recall_memories(user_id, user_prompt),
+            fetch_prompt_urls(backend_manager.client, user_prompt) if has_urls else asyncio.sleep(0, result=None),
+        )
         if recalled_memory:
             MEMORY_RECALL_COUNTER.inc()
+        if url_context:
+            WEB_SEARCH_COUNTER.inc()
 
-    is_cacheable = is_single_turn and not (want_web or want_img) and not recalled_memory
+    is_cacheable = is_single_turn and not (want_web or want_img or has_urls) and not recalled_memory
     cached_text, cache_status = await cache_manager.lookup_response(
         model_tier=decision.target_tier.value,
         prompt=user_prompt,
@@ -260,7 +270,7 @@ async def chat_completions(
         badge = _routing_badge(decision, cache_status)
         return _direct_reply(chunk_id, req.model, f"{badge}{cached_text}", req.stream)
 
-    extra_blocks = [b for b in (recalled_memory,) if b]
+    extra_blocks = [b for b in (recalled_memory, url_context) if b]
     steered_messages = apply_dynamic_steering(req.messages, decision, extra_context_blocks=extra_blocks)
     verified_images: list[dict[str, str]] = []
     target_url = f"{backend_manager.url_for_tier(decision.target_tier)}/v1/chat/completions"
