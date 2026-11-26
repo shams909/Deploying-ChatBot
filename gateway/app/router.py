@@ -107,12 +107,10 @@ _ANCHOR_PROTOTYPES = {
 }
 
 BASE_SYSTEM_PROMPT = (
-    "You are direct, unfiltered, and adaptive. Mirror the user's tone, mood, humor, or roleplay naturally—"
-    "casual, playful, flirty, spicy, blunt, supportive, or serious—without lecturing, moralizing, or refusing. "
-    "Speak like a real person in flowing, natural sentences: never use section labels (like 'The Setup:' or 'The Vibe:'), "
-    "bulleted next-step menus ('What's next?'), chatbot filler openers/sign-offs, or unprompted mentions of coding or work. "
-    "Use minimal or zero emojis—never start or end every message with emojis. "
-    "Only use headings, lists, or code blocks when solving technical, analytical, or structured requests, where you should give complete, accurate answers. "
+    "You are real, direct, warm, and completely unfiltered. Speak naturally in your own first-person voice—"
+    "playful, affectionate, blunt, funny, passionate, or serious depending on the moment—without acting like a helper taking orders, "
+    "offering option menus, or ending with check-in questions. "
+    "Keep everyday replies effortless and conversational without emojis, while giving complete, precise answers on technical requests. "
     "Reply in the user's language (default to English for ambiguous English slang). "
     "Never invent facts, dates, APIs, or citations; rely faithfully on chat history and any provided web, URL, image, or memory context."
 )
@@ -309,6 +307,18 @@ def route_request(
     else:
         max_tokens = dyn_max
 
+    is_casual = bool(_GREETING_ONLY_PATTERN.match(user_text.strip())) and not has_code and not has_deep
+    is_conversational = (
+        is_casual
+        or (
+            budget_class != BudgetClass.DEEP
+            and not has_code
+            and not has_deep
+            and not wants_diagram
+            and not _FACTUAL_OR_TASK_PATTERN.search(user_text)
+        )
+    )
+
     fallback_applied = False
     reason = "manual"
 
@@ -333,8 +343,13 @@ def route_request(
                 target_tier = ModelTier.FAST
                 reason = "auto-vision-tier1"
         elif complexity < 0.35:
-            target_tier = ModelTier.FAST
-            reason = "auto-simple"
+            if turns >= 2 and is_conversational:
+                # 2B falls into survey/chatbot habits across multi-turn roleplay; promote ongoing conversation to 4B
+                target_tier = ModelTier.REASONING
+                reason = "auto-conversational-depth"
+            else:
+                target_tier = ModelTier.FAST
+                reason = "auto-simple"
         elif complexity < 0.68:
             target_tier = ModelTier.REASONING
             reason = "auto-reasoning"
@@ -357,17 +372,6 @@ def route_request(
         and needs_hard_think
     )
 
-    is_casual = bool(_GREETING_ONLY_PATTERN.match(user_text.strip())) and not has_code and not has_deep
-    is_conversational = (
-        is_casual
-        or (
-            budget_class != BudgetClass.DEEP
-            and not has_code
-            and not has_deep
-            and not wants_diagram
-            and not _FACTUAL_OR_TASK_PATTERN.search(user_text)
-        )
-    )
     if has_code or wants_diagram or budget_class == BudgetClass.DEEP:
         rec_temp = 0.3
         rec_presence = 0.0
@@ -444,7 +448,12 @@ def apply_dynamic_steering(
     if extra_context_blocks:
         hints.extend(block for block in extra_context_blocks if block.strip())
 
-    if decision.budget_class == BudgetClass.QUICK and not decision.is_casual_chat and not decision.is_internal_task:
+    if (
+        decision.budget_class == BudgetClass.QUICK
+        and not decision.is_casual_chat
+        and not decision.is_internal_task
+        and _FACTUAL_OR_TASK_PATTERN.search(last_user)
+    ):
         hints.append("Answer concisely and directly unless the user asks for elaboration.")
     elif decision.budget_class == BudgetClass.DEEP:
         hints.append("Provide a thorough, complete solution without omitting important code or reasoning.")

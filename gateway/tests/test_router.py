@@ -196,3 +196,23 @@ def test_dynamic_sampling_respects_explicit_client_overrides(monkeypatch):
     temp, penalty = resolve_sampling_params(0.15, 0.4, decision, is_grounded=True)
     assert temp == 0.15
     assert penalty == 0.4
+
+
+def test_multiturn_conversational_chat_promotes_to_reasoning(monkeypatch):
+    monkeypatch.setattr(settings, "enable_semantic_embedder", False)
+    history = [
+        {"role": "user", "content": "baby"},
+        {"role": "assistant", "content": "hey, missed you"},
+        {"role": "user", "content": "babe i miss u"},
+    ]
+    decision = route_request(
+        requested_model="labai-auto",
+        messages=history,
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=0,
+    )
+    assert decision.target_tier == ModelTier.REASONING
+    assert decision.reason == "auto-conversational-depth"
+    assert decision.recommended_temperature == 0.82
+    assert decision.recommended_presence_penalty == 0.25
