@@ -54,6 +54,7 @@ _INTERNAL_TASK_PATTERN = re.compile(
     r"(^|\n)###\s*Task:\s*\n|Generate a concise, 3-5 word title|Generate 1-3 broad tags|suggest 3-5 relevant follow-up",
     re.IGNORECASE,
 )
+_BADGE_LINE_PATTERN = re.compile(r"^>\s*\*LabAI\s*→.*?\*\s*\n*", re.MULTILINE)
 
 _ANCHOR_PROTOTYPES = {
     "simple": [
@@ -277,8 +278,14 @@ def route_request(
 
 
 def apply_dynamic_steering(messages: list[dict[str, Any]], decision: RoutingDecision) -> list[dict[str, Any]]:
-    """Return a copy of messages with dynamic conciseness, diagram, and Qwen3 /think steering."""
-    steered = [dict(m) for m in messages]
+    """Return a copy of messages with prior UI badges stripped and dynamic steering applied."""
+    steered: list[dict[str, Any]] = []
+    for m in messages:
+        msg = dict(m)
+        if msg.get("role") == "assistant" and isinstance(msg.get("content"), str):
+            msg["content"] = _BADGE_LINE_PATTERN.sub("", msg["content"]).lstrip()
+        steered.append(msg)
+
     hints: list[str] = []
 
     if decision.budget_class == BudgetClass.QUICK:

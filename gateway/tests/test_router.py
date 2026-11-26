@@ -77,3 +77,23 @@ def test_openwebui_internal_task_routes_to_fast_without_badge(monkeypatch):
     assert decision.is_internal_task is True
     assert decision.target_tier == ModelTier.FAST
     assert decision.enable_thinking is False
+
+
+def test_apply_dynamic_steering_strips_prior_routing_badges(monkeypatch):
+    monkeypatch.setattr(settings, "enable_semantic_embedder", False)
+    decision = route_request(
+        requested_model="labai-auto",
+        messages=[{"role": "user", "content": "hey"}],
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=0,
+    )
+    history = [
+        {"role": "user", "content": "hey"},
+        {"role": "assistant", "content": "> *LabAI → `Fast (4B)` • Budget: `quick` (`768`) • Cache: `HIT_EXACT`*\n\nHi!"},
+        {"role": "user", "content": "yo"},
+    ]
+    steered = apply_dynamic_steering(history, decision)
+    assistant_msg = next(m for m in steered if m["role"] == "assistant")
+    assert "LabAI →" not in assistant_msg["content"]
+    assert assistant_msg["content"] == "Hi!"
