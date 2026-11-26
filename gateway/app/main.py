@@ -33,6 +33,7 @@ from app.router import (
     apply_dynamic_steering,
     extract_last_user_text,
     has_image_attachments,
+    resolve_sampling_params,
     route_request,
     strip_image_attachments,
 )
@@ -90,6 +91,7 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
     temperature: float = 0.7
     top_p: float = 0.9
+    presence_penalty: float | None = None
     max_tokens: int | None = Field(default=None)
     user: str | None = None
 
@@ -269,12 +271,19 @@ async def chat_completions(
         if url_context:
             WEB_SEARCH_COUNTER.inc()
 
+    eff_temp, eff_presence = resolve_sampling_params(
+        req.temperature,
+        req.presence_penalty,
+        decision,
+        is_grounded=bool(url_context or want_web),
+    )
+
     is_cacheable = is_single_turn and not (want_web or want_img or has_urls or has_images) and not recalled_memory
     cached_text, cache_status = await cache_manager.lookup_response(
         model_tier=decision.target_tier.value,
         prompt=user_prompt,
         is_single_turn=is_cacheable,
-        temperature=req.temperature,
+        temperature=eff_temp,
     )
     CACHE_COUNTER.labels(outcome=cache_status.split("(")[0]).inc()
     REQ_COUNTER.labels(requested_model=req.model, target_tier=decision.target_tier.value, cache=cache_status.split("(")[0]).inc()
@@ -314,12 +323,21 @@ async def chat_completions(
         verified_images = tool_images
         WEB_SEARCH_COUNTER.inc()
 
+    if verified_images:
+        eff_temp, eff_presence = resolve_sampling_params(
+            req.temperature,
+            req.presence_penalty,
+            decision,
+            is_grounded=True,
+        )
+
     upstream_payload = {
         "model": decision.target_tier.value,
         "messages": steered_messages,
         "stream": req.stream,
-        "temperature": req.temperature,
+        "temperature": eff_temp,
         "top_p": req.top_p,
+        "presence_penalty": eff_presence,
         "max_tokens": decision.max_tokens,
         "chat_template_kwargs": {"enable_thinking": decision.enable_thinking},
     }
@@ -336,7 +354,7 @@ async def chat_completions(
                 chat_id=x_openwebui_chat_id,
                 user_prompt=user_prompt,
                 is_cacheable=is_cacheable,
-                temperature=req.temperature,
+                temperature=eff_temp,
                 cache_status=cache_status,
                 verified_images=verified_images,
             ),
@@ -351,7 +369,7 @@ async def chat_completions(
         content = _append_missing_images(content, verified_images)
         output_tokens = int(data.get("usage", {}).get("completion_tokens", max(1, len(content) // 4)))
         TOKEN_COUNTER.labels(tier=decision.target_tier.value).inc(output_tokens)
-        await cache_manager.store_response(decision.target_tier.value, user_prompt, content, is_cacheable, req.temperature)
+        await cache_manager.store_response(decision.target_tier.value, user_prompt, content, is_cacheable, eff_temp)
         if not decision.is_internal_task and not decision.is_casual_chat:
             asyncio.create_task(extract_and_save_memories(user_id, x_openwebui_chat_id, user_prompt))
         data["choices"][0]["message"]["content"] = f"{_routing_badge(decision, cache_status)}{content}"

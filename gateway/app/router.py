@@ -180,6 +180,8 @@ class RoutingDecision:
     reason: str
     is_internal_task: bool = False
     is_casual_chat: bool = False
+    recommended_temperature: float = 0.7
+    recommended_presence_penalty: float = 0.0
 
 
 def is_internal_webui_task(user_text: str) -> bool:
@@ -270,6 +272,8 @@ def route_request(
             fallback_applied=False,
             reason="openwebui-internal-task",
             is_internal_task=True,
+            recommended_temperature=0.2,
+            recommended_presence_penalty=0.0,
         )
 
     heur_score, has_code, has_deep, wants_diagram = compute_heuristic_complexity(messages, user_text)
@@ -348,6 +352,17 @@ def route_request(
         and needs_hard_think
     )
 
+    is_casual = bool(_GREETING_ONLY_PATTERN.match(user_text.strip())) and not has_code and not has_deep
+    if has_code or wants_diagram or budget_class == BudgetClass.DEEP:
+        rec_temp = 0.3
+        rec_presence = 0.0
+    elif is_casual:
+        rec_temp = 0.78
+        rec_presence = 0.15
+    else:
+        rec_temp = 0.55
+        rec_presence = 0.05
+
     return RoutingDecision(
         requested_model=requested_model,
         target_tier=target_tier,
@@ -358,8 +373,33 @@ def route_request(
         complexity_score=round(complexity, 3),
         fallback_applied=fallback_applied,
         reason=reason,
-        is_casual_chat=bool(_GREETING_ONLY_PATTERN.match(user_text.strip())) and not has_code and not has_deep,
+        is_casual_chat=is_casual,
+        recommended_temperature=rec_temp,
+        recommended_presence_penalty=rec_presence,
     )
+
+
+def resolve_sampling_params(
+    requested_temp: float,
+    requested_presence_penalty: float | None,
+    decision: RoutingDecision,
+    is_grounded: bool = False,
+) -> tuple[float, float]:
+    """Return task-adaptive (temperature, presence_penalty) while respecting explicit client overrides."""
+    using_default_temp = abs(requested_temp - 0.7) < 1e-6 or abs(requested_temp - 0.8) < 1e-6
+    if using_default_temp:
+        eff_temp = min(decision.recommended_temperature, 0.3) if is_grounded else decision.recommended_temperature
+    else:
+        eff_temp = requested_temp
+
+    if requested_presence_penalty is not None:
+        eff_presence = requested_presence_penalty
+    elif is_grounded:
+        eff_presence = 0.0
+    else:
+        eff_presence = decision.recommended_presence_penalty
+
+    return eff_temp, eff_presence
 
 
 def apply_dynamic_steering(

@@ -1,7 +1,13 @@
 """Unit tests for Auto Router, Dynamic Budgeting, and Circuit Breaker Fallback."""
 
 from app.config import settings
-from app.router import BudgetClass, ModelTier, apply_dynamic_steering, route_request
+from app.router import (
+    BudgetClass,
+    ModelTier,
+    apply_dynamic_steering,
+    resolve_sampling_params,
+    route_request,
+)
 
 
 def test_quick_question_routes_to_fast_and_concise_budget(monkeypatch):
@@ -131,3 +137,50 @@ def test_retry_frustration_escalates_follow_up_to_pro(monkeypatch):
     )
     assert decision.target_tier == ModelTier.PRO
     assert decision.reason == "auto-retry-escalation"
+
+
+def test_dynamic_sampling_coding_and_diagram_prompts(monkeypatch):
+    monkeypatch.setattr(settings, "enable_semantic_embedder", False)
+    decision = route_request(
+        requested_model="labai-auto",
+        messages=[{"role": "user", "content": "Write a Python FastAPI endpoint and Mermaid diagram"}],
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=0,
+    )
+    temp, penalty = resolve_sampling_params(0.7, None, decision, is_grounded=False)
+    assert temp == 0.3
+    assert penalty == 0.0
+
+
+def test_dynamic_sampling_casual_and_grounded_prompts(monkeypatch):
+    monkeypatch.setattr(settings, "enable_semantic_embedder", False)
+    casual = route_request(
+        requested_model="labai-auto",
+        messages=[{"role": "user", "content": "hey"}],
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=0,
+    )
+    temp, penalty = resolve_sampling_params(0.7, None, casual, is_grounded=False)
+    assert temp == 0.78
+    assert penalty == 0.15
+
+    # Grounded web/URL requests clamp back down for factual adherence
+    grounded_temp, grounded_penalty = resolve_sampling_params(0.8, None, casual, is_grounded=True)
+    assert grounded_temp == 0.3
+    assert grounded_penalty == 0.0
+
+
+def test_dynamic_sampling_respects_explicit_client_overrides(monkeypatch):
+    monkeypatch.setattr(settings, "enable_semantic_embedder", False)
+    decision = route_request(
+        requested_model="labai-auto",
+        messages=[{"role": "user", "content": "hey"}],
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=0,
+    )
+    temp, penalty = resolve_sampling_params(0.15, 0.4, decision, is_grounded=True)
+    assert temp == 0.15
+    assert penalty == 0.4
