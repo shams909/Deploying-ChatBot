@@ -33,7 +33,13 @@ from app.router import (
     extract_last_user_text,
     route_request,
 )
-from app.web_search import gather_web_context, search_verified_images
+from app.web_search import (
+    TOOLS_SCHEMA,
+    execute_tool_calls,
+    gather_web_context,
+    might_need_tools,
+    search_verified_images,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("labai.gateway")
@@ -228,22 +234,17 @@ async def chat_completions(
     user_turns = sum(1 for m in req.messages if m.get("role") == "user")
     is_single_turn = user_turns == 1 and not decision.is_internal_task
 
-    web_context: str | None = None
-    verified_images: list[dict[str, str]] = []
-    used_web = False
+    want_web = False
+    want_img = False
     recalled_memory: str | None = None
 
     if not decision.is_internal_task:
-        (web_context, verified_images, used_web), recalled_memory = await asyncio.gather(
-            gather_web_context(backend_manager.client, user_prompt),
-            recall_memories(user_id, user_prompt),
-        )
-        if used_web:
-            WEB_SEARCH_COUNTER.inc()
+        want_web, want_img = might_need_tools(user_prompt)
+        recalled_memory = await recall_memories(user_id, user_prompt)
         if recalled_memory:
             MEMORY_RECALL_COUNTER.inc()
 
-    is_cacheable = is_single_turn and not used_web and not recalled_memory
+    is_cacheable = is_single_turn and not (want_web or want_img) and not recalled_memory
     cached_text, cache_status = await cache_manager.lookup_response(
         model_tier=decision.target_tier.value,
         prompt=user_prompt,
@@ -259,8 +260,29 @@ async def chat_completions(
         badge = _routing_badge(decision, cache_status)
         return _direct_reply(chunk_id, req.model, f"{badge}{cached_text}", req.stream)
 
-    extra_blocks = [b for b in (recalled_memory, web_context) if b]
+    extra_blocks = [b for b in (recalled_memory,) if b]
     steered_messages = apply_dynamic_steering(req.messages, decision, extra_context_blocks=extra_blocks)
+    verified_images: list[dict[str, str]] = []
+    target_url = f"{backend_manager.url_for_tier(decision.target_tier)}/v1/chat/completions"
+
+    if (want_web or want_img) and not decision.is_internal_task:
+        planned_msg, tool_images, direct_reply = await _run_tool_planning(
+            target_url=target_url,
+            tier=decision.target_tier,
+            steered_messages=steered_messages,
+            user_prompt=user_prompt,
+            want_web=want_web,
+            want_img=want_img,
+        )
+        if direct_reply is not None:
+            if not decision.is_internal_task:
+                await cache_manager.release_user_slot_and_record_tokens(user_id, max(1, len(direct_reply) // 4))
+            badge = _routing_badge(decision, cache_status)
+            return _direct_reply(chunk_id, req.model, f"{badge}{direct_reply}", req.stream)
+        steered_messages = planned_msg
+        verified_images = tool_images
+        WEB_SEARCH_COUNTER.inc()
+
     upstream_payload = {
         "model": decision.target_tier.value,
         "messages": steered_messages,
@@ -269,7 +291,6 @@ async def chat_completions(
         "top_p": req.top_p,
         "max_tokens": decision.max_tokens,
     }
-    target_url = f"{backend_manager.url_for_tier(decision.target_tier)}/v1/chat/completions"
 
     if req.stream:
         return StreamingResponse(
@@ -309,6 +330,67 @@ async def chat_completions(
             await cache_manager.release_user_slot_and_record_tokens(user_id, output_tokens)
 
 
+async def _run_tool_planning(
+    target_url: str,
+    tier: ModelTier,
+    steered_messages: list[dict[str, Any]],
+    user_prompt: str,
+    want_web: bool,
+    want_img: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], str | None]:
+    """Let Qwen3 decide tool calls (web_search/image_search) or fall back cleanly to SearXNG."""
+    plan_messages = [dict(m) for m in steered_messages]
+    tool_hint = (
+        "You have live tools: web_search(query) and image_search(query). "
+        "If the user asks for photos/faces/images of multiple subjects, call image_search once per subject. "
+        "Never claim you cannot display images.\n/no_think"
+    )
+    if plan_messages and plan_messages[0].get("role") == "system":
+        plan_messages[0]["content"] = f"{plan_messages[0]['content']}\n{tool_hint}"
+    else:
+        plan_messages.insert(0, {"role": "system", "content": tool_hint})
+
+    plan_payload = {
+        "model": tier.value,
+        "messages": plan_messages,
+        "tools": TOOLS_SCHEMA,
+        "tool_choice": "auto",
+        "stream": False,
+        "temperature": 0.2,
+        "max_tokens": 350,
+    }
+    try:
+        plan_data = await _call_non_streaming(target_url, plan_payload, tier)
+        assistant_msg = plan_data["choices"][0]["message"]
+        tool_calls = assistant_msg.get("tool_calls") or []
+        if tool_calls:
+            tool_msgs, verified_images = await execute_tool_calls(backend_manager.client, tool_calls)
+            updated = list(plan_messages) + [assistant_msg] + tool_msgs
+            updated[0]["content"] = (
+                f"{updated[0]['content']}\nUse the tool outputs to answer accurately. "
+                "Cite web sources as [1](url) and embed verified images with Markdown ![caption](url)."
+            )
+            return updated, verified_images, None
+
+        direct_content = (assistant_msg.get("content") or "").strip()
+        refused_images = "can't display images" in direct_content.lower() or "cannot display images" in direct_content.lower()
+        if direct_content and not refused_images and not want_img:
+            return steered_messages, [], direct_content
+    except Exception as exc:
+        logger.warning("Native tool planning failed (%s); using direct SearXNG fallback.", exc)
+
+    # Fallback: direct SearXNG lookup if model skipped/refused tool call
+    web_ctx, fallback_images, _ = await gather_web_context(backend_manager.client, user_prompt)
+    if web_ctx:
+        updated = [dict(m) for m in steered_messages]
+        if updated and updated[0].get("role") == "system":
+            updated[0]["content"] = f"{updated[0]['content']}\n\n{web_ctx}"
+        else:
+            updated.insert(0, {"role": "system", "content": web_ctx})
+        return updated, fallback_images, None
+    return steered_messages, [], None
+
+
 async def _call_non_streaming(url: str, payload: dict[str, Any], tier: ModelTier) -> dict[str, Any]:
     if tier in (ModelTier.FAST, ModelTier.REASONING):
         async with backend_manager.node1_semaphore:
@@ -333,7 +415,16 @@ async def _call_non_streaming(url: str, payload: dict[str, Any], tier: ModelTier
 def _format_image_gallery(verified_images: list[dict[str, str]]) -> str:
     if not verified_images:
         return ""
-    lines = [f"![{im['title']}]({im['image_url']})" for im in verified_images[:3]]
+    seen: set[str] = set()
+    lines: list[str] = []
+    for im in verified_images:
+        url = im["image_url"]
+        if url in seen:
+            continue
+        seen.add(url)
+        lines.append(f"![{im['title']}]({url})")
+        if len(lines) >= 6:
+            break
     return "\n\n" + "\n\n".join(lines)
 
 

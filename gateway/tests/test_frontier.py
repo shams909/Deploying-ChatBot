@@ -5,7 +5,13 @@ from datetime import datetime, timezone
 from app.config import settings
 from app.memory import delete_memories, handle_memory_command, list_memories
 from app.router import ModelTier, apply_dynamic_steering, route_request
-from app.web_search import clean_image_query, extract_clean_text, needs_image_search, needs_web_search
+from app.web_search import (
+    clean_image_query,
+    execute_tool_calls,
+    extract_clean_text,
+    needs_image_search,
+    needs_web_search,
+)
 
 
 def test_frontier_prompt_injects_date_and_skips_slang_and_clipped_greetings(monkeypatch):
@@ -88,5 +94,38 @@ def test_memory_commands_and_chat_scoped_deletion(monkeypatch):
         cleared = await handle_memory_command("u1", "/memory clear")
         assert cleared is not None and "Cleared 1" in cleared
         assert await list_memories("u1") == []
+
+    asyncio.run(run())
+
+
+def test_execute_tool_calls_dispatches_multiple_subjects(monkeypatch):
+    import asyncio
+    import json
+    from app import web_search as ws_mod
+
+    seen_queries: list[str] = []
+
+    async def fake_images(client, query: str, limit: int = 2):
+        seen_queries.append(query)
+        return [{"title": query, "image_url": f"https://img.example/{query.replace(' ', '_')}.jpg", "source": ""}]
+
+    async def fake_pages(client, query: str, max_results=None):
+        seen_queries.append(query)
+        return [{"title": "Latest Release", "url": "https://example.com", "content": "Python 3.14 released"}]
+
+    monkeypatch.setattr(ws_mod, "search_verified_images", fake_images)
+    monkeypatch.setattr(ws_mod, "search_web_pages", fake_pages)
+
+    tool_calls = [
+        {"id": "call_1", "function": {"name": "image_search", "arguments": json.dumps({"query": "Mark Zuckerberg"})}},
+        {"id": "call_2", "function": {"name": "image_search", "arguments": json.dumps({"query": "Jensen Huang"})}},
+        {"id": "call_3", "function": {"name": "web_search", "arguments": json.dumps({"query": "Python 2026 release"})}},
+    ]
+
+    async def run() -> None:
+        msgs, imgs = await execute_tool_calls(None, tool_calls)  # type: ignore[arg-type]
+        assert len(msgs) == 3
+        assert len(imgs) == 2
+        assert seen_queries == ["Mark Zuckerberg", "Jensen Huang", "Python 2026 release"]
 
     asyncio.run(run())
