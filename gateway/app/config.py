@@ -1,0 +1,42 @@
+"""Application configuration for the LabAI Control Plane Gateway."""
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="LABAI_", env_file=".env", extra="ignore")
+
+    tier1_url: str = "http://127.0.0.1:8081"
+    tier2_url: str = "http://127.0.0.1:8082"
+    tier3_url: str = "http://192.168.9.135:8083"
+
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    searxng_url: str = "http://127.0.0.1:8080"
+
+    # Routing & Caching
+    enable_semantic_embedder: bool = True
+    embedder_model: str = "BAAI/bge-small-en-v1.5"
+    semantic_cache_threshold: float = 0.92
+    semantic_cache_ttl_seconds: int = 86400
+    semantic_cache_max_entries: int = 250
+
+    # Dynamic Token Budgeting
+    budget_quick_tokens: int = 768
+    budget_standard_tokens: int = 2048
+    budget_deep_tokens: int = 4096
+    hard_max_tokens: int = 4096
+
+    # Concurrency, Quotas & Circuit Breaker
+    node1_max_concurrent: int = 1
+    node2_queue_limit: int = 2
+    circuit_breaker_failures: int = 3
+    circuit_breaker_cooldown_seconds: int = 30
+    user_token_quota: int = 10000
+    quota_window_seconds: int = 900
+
+    # UX Telemetry
+    enable_routing_badge: bool = True
+    enable_think_steering: bool = True
+
+
+settings = Settings()

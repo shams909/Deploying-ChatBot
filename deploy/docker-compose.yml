@@ -1,0 +1,142 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: labai-caddy
+    restart: unless-stopped
+    cpuset: "16-19"
+    ports:
+      - "80:80"
+      - "8080:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - open-webui
+    networks:
+      - labai-net
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: labai-openwebui
+    restart: unless-stopped
+    cpuset: "16-19"
+    ports:
+      - "3000:8080"
+    environment:
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-change-me-webui-secret}
+      - OPENAI_API_BASE_URL=http://gateway:8000/v1
+      - OPENAI_API_KEY=labai-local-key
+      - ENABLE_OLLAMA_API=false
+      - ENABLE_RAG_WEB_SEARCH=true
+      - RAG_WEB_SEARCH_ENGINE=searxng
+      - SEARXNG_QUERY_URL=http://searxng:8080/search?q=<query>
+      - DEFAULT_MODELS=labai-auto
+      - WEBUI_NAME=LabAI Campus Assistant
+    volumes:
+      - openwebui_data:/app/backend/data
+    depends_on:
+      - gateway
+      - searxng
+    networks:
+      - labai-net
+
+  gateway:
+    build:
+      context: ../gateway
+      dockerfile: Dockerfile
+    container_name: labai-gateway
+    restart: unless-stopped
+    cpuset: "16-19"
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - LABAI_TIER1_URL=http://host.docker.internal:8081
+      - LABAI_TIER2_URL=http://host.docker.internal:8082
+      - LABAI_TIER3_URL=http://${WORKER_IP:-192.168.9.135}:8083
+      - LABAI_REDIS_URL=redis://redis:6379/0
+      - LABAI_SEARXNG_URL=http://searxng:8080
+      - LABAI_ENABLE_ROUTING_BADGE=${LABAI_ENABLE_ROUTING_BADGE:-true}
+      - LABAI_ENABLE_THINK_STEERING=${LABAI_ENABLE_THINK_STEERING:-true}
+      - LABAI_USER_TOKEN_QUOTA=${LABAI_USER_TOKEN_QUOTA:-10000}
+    depends_on:
+      - redis
+    networks:
+      - labai-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: labai-redis
+    restart: unless-stopped
+    cpuset: "16-19"
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    networks:
+      - labai-net
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: labai-searxng
+    restart: unless-stopped
+    cpuset: "16-19"
+    environment:
+      - SEARXNG_SECRET=${SEARXNG_SECRET_KEY:-change-me-searxng-secret}
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    networks:
+      - labai-net
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: labai-node01-exporter
+    restart: unless-stopped
+    cpuset: "16-19"
+    pid: host
+    command:
+      - "--path.rootfs=/host"
+    volumes:
+      - "/:/host:ro,rslave"
+    networks:
+      - labai-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: labai-prometheus
+    restart: unless-stopped
+    cpuset: "16-19"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - labai-net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: labai-grafana
+    restart: unless-stopped
+    cpuset: "16-19"
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - labai-net
+
+networks:
+  labai-net:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  openwebui_data:
+  prometheus_data:
+  grafana_data:

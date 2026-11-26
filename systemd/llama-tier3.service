@@ -1,0 +1,36 @@
+[Unit]
+Description=LabAI Tier 3 Inference (Qwen3-14B Pro + 0.6B Speculative Draft)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cluster
+Group=cluster
+# One logical thread per physical P-core (Cores 0-7 = CPUs 0,2,4,6,8,10,12,14)
+CPUAffinity=0 2 4 6 8 10 12 14
+Nice=-5
+ExecStart=/opt/llama.cpp/build/bin/llama-server \
+  --model /opt/labai/models/Qwen3-14B-Q4_K_M.gguf \
+  --model-draft /opt/labai/models/Qwen3-0.6B-Q8_0.gguf \
+  --draft-max 8 \
+  --draft-p-min 0.5 \
+  --alias labai-pro \
+  --host 0.0.0.0 \
+  --port 8083 \
+  --threads 8 \
+  --threads-batch 8 \
+  --ctx-size 8192 \
+  --parallel 1 \
+  --flash-attn on \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --cache-reuse 256 \
+  --metrics
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
