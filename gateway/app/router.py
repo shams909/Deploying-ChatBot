@@ -77,6 +77,12 @@ _ANCHOR_PROTOTYPES = {
     ],
 }
 
+BASE_SYSTEM_PROMPT = (
+    "You are LabAI, a helpful and accurate AI assistant. Always reply in the language of the user's request "
+    "(use English for casual greetings or slang like 'yo' unless they clearly write in another language). "
+    "Do not fabricate facts; if unsure, state clearly what you do not know."
+)
+
 MERMAID_SYSTEM_HINT = (
     "When drawing a diagram, output a valid ```mermaid``` code block (flowchart TD, sequenceDiagram, "
     "classDiagram, or erDiagram). ALWAYS wrap every node label in double quotes like "
@@ -288,6 +294,9 @@ def apply_dynamic_steering(messages: list[dict[str, Any]], decision: RoutingDeci
         steered.append(msg)
 
     hints: list[str] = []
+
+    if not decision.is_internal_task:
+        hints.append(BASE_SYSTEM_PROMPT)
 
     if decision.budget_class == BudgetClass.QUICK:
         hints.append("Answer concisely and directly unless the user asks for elaboration.")
