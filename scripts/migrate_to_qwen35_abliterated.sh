@@ -40,7 +40,7 @@ for fname, dest in [(model_file, "/opt/labai/models/tier3-pro.gguf"), (mmproj_fi
         continue
     url = f"https://huggingface.co/{repo}/resolve/main/{fname}"
     print(f"==> [node02] Downloading/resuming {fname} -> {dest}")
-    subprocess.run(["curl", "-fL", "--retry", "5", "--retry-delay", "5", "-C", "-", "-o", dest, url], check=True)
+    subprocess.run(["curl", "-fL", "--retry", "10", "--retry-all-errors", "--retry-delay", "5", "-C", "-", "-o", dest, url], check=True)
 PY
   echo "==> [node02] Stopping llama-tier3 and deleting old Qwen3-*.gguf models..."
   sudo systemctl stop llama-tier3 || true
@@ -63,8 +63,12 @@ rsync -az --delete \
   --exclude '.git' --exclude '__pycache__' --exclude '.venv' \
   "${REPO_DIR}/" "${WORKER_USER}@${WORKER_IP}:${REMOTE_DIR}/"
 
-echo "==> [2/4] Updating node02 (Qwen3.5-9B-abliterated + mmproj, deleting old Qwen3)..."
-ssh -t "${WORKER_USER}@${WORKER_IP}" "bash ${REMOTE_DIR}/scripts/migrate_to_qwen35_abliterated.sh --worker-exec"
+if [[ "${1:-}" != "--master-only" ]]; then
+  echo "==> [2/4] Updating node02 (Qwen3.5-9B-abliterated + mmproj, deleting old Qwen3)..."
+  ssh -t "${WORKER_USER}@${WORKER_IP}" "bash ${REMOTE_DIR}/scripts/migrate_to_qwen35_abliterated.sh --worker-exec"
+else
+  echo "==> [2/4] Skipping node02 (--master-only specified)."
+fi
 
 echo "==> [3/4] Downloading Qwen3.5-2B & 4B-abliterated (+ mmproj) on node01..."
 mkdir -p "$MODEL_DIR"
@@ -77,7 +81,7 @@ def download_if_needed(repo, fname, expected, dest):
         return
     url = f"https://huggingface.co/{repo}/resolve/main/{fname}"
     print(f"==> [node01] Downloading/resuming {fname} -> {dest}")
-    subprocess.run(["curl", "-fL", "--retry", "5", "--retry-delay", "5", "-C", "-", "-o", dest, url], check=True)
+    subprocess.run(["curl", "-fL", "--retry", "10", "--retry-all-errors", "--retry-delay", "5", "-C", "-", "-o", dest, url], check=True)
 
 def resolve_and_pull(repo, dest_model, dest_mmproj=None):
     with urllib.request.urlopen(f"https://huggingface.co/api/models/{repo}/tree/main", timeout=20) as r:
