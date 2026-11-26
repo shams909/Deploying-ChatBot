@@ -69,3 +69,4 @@ Once deployed:
 ## Documentation
 
 * **[Full System & Infrastructure Architecture](docs/ARCHITECTURE.md)** — Hardware bottleneck analysis, model/runtime trade-offs, Mermaid diagrams, memory budgets, and phased rollout details.
+* **[A-to-Z Engineering & MLOps Concepts Deep Dive](docs/DEEP_DIVE_CONCEPTS.md)** — Complete technical breakdown of memory-bandwidth rooflines, P/E-core isolation, FlashAttention/KV quantization, speculative decoding, 3-stage semantic routing, Redis caching, SSE streaming, and telemetry.
