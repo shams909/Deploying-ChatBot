@@ -43,6 +43,7 @@ from app.router import (
 from app.web_search import (
     TOOLS_SCHEMA,
     execute_tool_calls,
+    extract_prior_image_urls,
     extract_urls,
     fetch_prompt_urls,
     gather_web_context,
@@ -503,6 +504,7 @@ async def _run_tool_planning(
     want_img: bool,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]], str | None]:
     """Let Qwen3 decide tool calls (web_search/image_search) or fall back cleanly to SearXNG."""
+    exclude_urls = extract_prior_image_urls(steered_messages)
     plan_messages = [dict(m) for m in steered_messages]
     tool_hint = (
         "You have live tools: web_search(query) and image_search(query). "
@@ -531,11 +533,18 @@ async def _run_tool_planning(
         assistant_msg = plan_data["choices"][0]["message"]
         tool_calls = assistant_msg.get("tool_calls") or []
         if tool_calls:
-            tool_msgs, verified_images = await execute_tool_calls(backend_manager.client, tool_calls)
+            tool_msgs, verified_images = await execute_tool_calls(
+                backend_manager.client, tool_calls, exclude_urls=exclude_urls
+            )
             updated = list(plan_messages) + [assistant_msg] + tool_msgs
+            img_instruction = (
+                "Embed verified images ONLY using exact image_url values returned by tool outputs (`![caption](url)`)."
+                if verified_images
+                else "No verified images were returned by tool outputs. Do NOT output any `![...](...)` image links or invent URLs."
+            )
             updated[0]["content"] = (
                 f"{updated[0]['content']}\nUse the tool outputs to answer accurately. "
-                "Cite web sources as [1](url) and embed verified images with Markdown ![caption](url)."
+                f"Cite web sources as [1](url). {img_instruction}"
             )
             return updated, verified_images, None
 
@@ -547,7 +556,9 @@ async def _run_tool_planning(
         logger.warning("Native tool planning failed (%s); using direct SearXNG fallback.", exc)
 
     # Fallback: direct SearXNG lookup if model skipped/refused tool call
-    web_ctx, fallback_images, _ = await gather_web_context(backend_manager.client, user_prompt)
+    web_ctx, fallback_images, _ = await gather_web_context(
+        backend_manager.client, user_prompt, exclude_urls=exclude_urls
+    )
     if web_ctx:
         updated = [dict(m) for m in steered_messages]
         if updated and updated[0].get("role") == "system":

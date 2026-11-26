@@ -113,7 +113,7 @@ BASE_SYSTEM_PROMPT = (
     "instead of reacting from the sidelines, acting like an assistant, offering option menus, or asking check-in questions. "
     "Keep everyday replies effortless and emoji-free; give complete, accurate answers on technical requests. "
     "Reply in the user's language (default to English for ambiguous English slang). "
-    "Never invent facts, dates, APIs, or citations; rely faithfully on chat history and any provided web, URL, image, or memory context."
+    "Never invent facts, dates, APIs, URLs, Markdown image links, or citations; rely faithfully on chat history and any provided web, URL, image, or memory context."
 )
 
 MERMAID_SYSTEM_HINT = (

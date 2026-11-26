@@ -259,3 +259,42 @@ def test_multimodal_image_guard_and_vision_routing(monkeypatch):
     deep_decision = route_request("labai-auto", deep_msgs, None, True, 0)
     assert deep_decision.target_tier == ModelTier.PRO
     assert deep_decision.reason == "auto-vision-pro"
+
+
+def test_image_search_safesearch_off_and_dedup_pagination(monkeypatch):
+    import asyncio
+    from app import web_search as ws_mod
+
+    seen_params: list[dict[str, str]] = []
+
+    class _FakeResp:
+        def __init__(self, items: list[dict[str, str]]) -> None:
+            self._items = items
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, list[dict[str, str]]]:
+            return {"results": self._items}
+
+    class _FakeClient:
+        async def get(self, url: str, params: dict[str, str] | None = None, timeout: float = 4.0):
+            assert params is not None
+            seen_params.append(params)
+            if params.get("pageno") == "1":
+                return _FakeResp([{"title": "Pic 1", "img_src": "https://img.example/1.jpg", "url": "https://example.com/1"}])
+            return _FakeResp([{"title": "Pic 2", "img_src": "https://img.example/2.jpg", "url": "https://example.com/2"}])
+
+    async def _always_ok(_client, _url: str) -> bool:
+        return True
+
+    monkeypatch.setattr(ws_mod, "_verify_image_url", _always_ok)
+
+    prior = [{"role": "assistant", "content": "Here:\n![Pic 1](https://img.example/1.jpg)"}]
+    prior_urls = ws_mod.extract_prior_image_urls(prior)
+    assert prior_urls == {"https://img.example/1.jpg"}
+
+    results = asyncio.run(ws_mod.search_verified_images(_FakeClient(), "send me a photo of mountains", limit=1, exclude_urls=prior_urls))
+    assert len(results) == 1
+    assert results[0]["image_url"] == "https://img.example/2.jpg"
+    assert all(p["safesearch"] == "0" for p in seen_params)

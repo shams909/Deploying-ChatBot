@@ -27,9 +27,7 @@ _WEB_INTENT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _IMAGE_INTENT_PATTERN = re.compile(
-    r"\b(show\s+me\s+(?:a|an|the)?\s*(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces|snap)|"
-    r"find\s+(?:a|an|the)?\s*(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces)|"
-    r"drop\s+(?:a|an)?\s*(?:pic|pics|photo|snap|image)|"
+    r"\b((?:show|send|give|find|drop)\s+(?:me\s+)?(?:another|more|a|an|the)?\s*(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces|snap)|"
     r"(?:a|an|the)?\s*(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces)\s+of|"
     r"what\s+does\s+.+\s+look\s+like)\b",
     re.IGNORECASE,
@@ -43,6 +41,7 @@ _CLOCK_ONLY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"'\]\)]+", re.IGNORECASE)
+_MD_IMAGE_URL_PATTERN = re.compile(r"!\[[^\]]*\]\((https?://[^)\s]+)\)")
 _INTERNAL_HOSTS = {
     "localhost",
     "node01",
@@ -58,8 +57,8 @@ _INTERNAL_HOSTS = {
 }
 
 _IMAGE_PREFIX_STRIP = re.compile(
-    r"^(?:please\s+)?(?:show\s+me|find|give\s+me|get\s+me|drop)?\s*"
-    r"(?:a|an|the)?\s*(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces|snap)\s+of\s+",
+    r"^(?:please\s+)?(?:show|send|give|find|get|drop)?\s*(?:me\s+)?"
+    r"(?:another|more|a|an|the)?\s*(?:photo|photos|picture|pictures|image|images|pic|pics|face|faces|snap)\s*(?:of\s+)?",
     re.IGNORECASE,
 )
 _BROWSER_HEADERS = {
@@ -411,34 +410,86 @@ async def search_web_pages(client: httpx.AsyncClient, query: str, max_results: i
     return formatted
 
 
-async def _pick_first_valid_candidate(client: httpx.AsyncClient, item: dict[str, Any], clean_q: str) -> dict[str, str] | None:
+def extract_prior_image_urls(messages: list[dict[str, Any]]) -> set[str]:
+    """Collect image URLs already shown in this conversation so repeat requests fetch fresh ones."""
+    seen: set[str] = set()
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            seen.update(_MD_IMAGE_URL_PATTERN.findall(content))
+    return seen
+
+
+async def _pick_first_valid_candidate(
+    client: httpx.AsyncClient,
+    item: dict[str, Any],
+    clean_q: str,
+    exclude_urls: set[str] | None = None,
+) -> dict[str, str] | None:
     for candidate in (str(item.get("img_src") or ""), str(item.get("thumbnail_src") or "")):
+        if not candidate or (exclude_urls and candidate in exclude_urls):
+            continue
         if await _verify_image_url(client, candidate):
             return {"title": str(item.get("title") or clean_q), "image_url": candidate, "source": str(item.get("url") or "")}
     return None
 
 
-async def search_verified_images(client: httpx.AsyncClient, query: str, limit: int = 3) -> list[dict[str, str]]:
+async def search_verified_images(
+    client: httpx.AsyncClient,
+    query: str,
+    limit: int = 3,
+    exclude_urls: set[str] | None = None,
+) -> list[dict[str, str]]:
     clean_q = clean_image_query(query)
-    try:
-        resp = await client.get(
-            f"{settings.searxng_url}/search",
-            params={"q": clean_q, "categories": "images", "format": "json"},
-            timeout=4.0,
-        )
-        resp.raise_for_status()
-        results = resp.json().get("results", [])[:8]
-    except Exception as exc:
-        logger.debug("Image search failed: %s", exc)
+    if not clean_q:
         return []
 
-    checked = await asyncio.gather(*(_pick_first_valid_candidate(client, item, clean_q) for item in results))
-    return [c for c in checked if c is not None][:limit]
+    collected: list[dict[str, str]] = []
+    seen_here: set[str] = set(exclude_urls or ())
+    max_pages = 3 if exclude_urls else 1
+
+    for pageno in range(1, max_pages + 1):
+        try:
+            resp = await client.get(
+                f"{settings.searxng_url}/search",
+                params={
+                    "q": clean_q,
+                    "categories": "images",
+                    "format": "json",
+                    "safesearch": "0",
+                    "pageno": str(pageno),
+                },
+                timeout=4.0,
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results", [])[:16]
+        except Exception as exc:
+            logger.debug("Image search failed (page %d): %s", pageno, exc)
+            break
+
+        if not results:
+            break
+
+        checked = await asyncio.gather(
+            *(_pick_first_valid_candidate(client, item, clean_q, exclude_urls=seen_here) for item in results)
+        )
+        for c in checked:
+            if c is None or c["image_url"] in seen_here:
+                continue
+            seen_here.add(c["image_url"])
+            collected.append(c)
+            if len(collected) >= limit:
+                return collected
+
+    return collected
 
 
 async def execute_tool_calls(
     client: httpx.AsyncClient,
     tool_calls: list[dict[str, Any]],
+    exclude_urls: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """Execute Qwen3 tool_calls concurrently against SearXNG and return (tool_messages, verified_images)."""
     async def _run_one(tc: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
@@ -456,7 +507,10 @@ async def execute_tool_calls(
             pages = await search_web_pages(client, query)
             content = json.dumps({"results": pages})
         elif name == "image_search" and query:
-            imgs = await search_verified_images(client, query, limit=2)
+            if exclude_urls:
+                imgs = await search_verified_images(client, query, limit=2, exclude_urls=exclude_urls)
+            else:
+                imgs = await search_verified_images(client, query, limit=2)
             content = json.dumps({"images": imgs})
         else:
             content = json.dumps({"error": f"Unknown tool or empty query: {name}"})
@@ -478,7 +532,11 @@ async def execute_tool_calls(
     return tool_messages, all_images
 
 
-async def gather_web_context(client: httpx.AsyncClient, user_text: str) -> tuple[str | None, list[dict[str, str]], bool]:
+async def gather_web_context(
+    client: httpx.AsyncClient,
+    user_text: str,
+    exclude_urls: set[str] | None = None,
+) -> tuple[str | None, list[dict[str, str]], bool]:
     """Fallback direct SearXNG lookup when model tool-calling isn't used."""
     do_web, do_img = might_need_tools(user_text)
     if not do_web and not do_img:
@@ -495,7 +553,10 @@ async def gather_web_context(client: httpx.AsyncClient, user_text: str) -> tuple
                 + "\n\n".join(lines)
             )
     if do_img:
-        verified_images = await search_verified_images(client, user_text, limit=3)
+        if exclude_urls:
+            verified_images = await search_verified_images(client, user_text, limit=3, exclude_urls=exclude_urls)
+        else:
+            verified_images = await search_verified_images(client, user_text, limit=3)
         if verified_images:
             img_lines = [f"- {im['title']}: {im['image_url']}" for im in verified_images]
             sections.append(
