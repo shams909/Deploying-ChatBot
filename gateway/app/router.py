@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -47,7 +48,11 @@ _DIAGRAM_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _QUICK_PATTERN = re.compile(
-    r"^(hi|hello|hey|thanks|thank you|ok|who are you|what is|define|translate|summarize briefly)\b",
+    r"^(hi|hello|hey|yo|sup|hiya|thanks|thank you|ok|who are you|what is|define|translate|summarize briefly)\b",
+    re.IGNORECASE,
+)
+_GREETING_ONLY_PATTERN = re.compile(
+    r"^(hi|hello|hey|yo|sup|what'?s up|how are you|good morning|good evening|thanks|thank you)\b[\w\s,!?.']{0,35}$",
     re.IGNORECASE,
 )
 _INTERNAL_TASK_PATTERN = re.compile(
@@ -78,11 +83,12 @@ _ANCHOR_PROTOTYPES = {
 }
 
 BASE_SYSTEM_PROMPT = (
-    "You are LabAI, a smart, natural, adaptive AI companion. Match the user's vibe and register: "
-    "if they talk casually or use slang (e.g., 'yo', 'bruv', 'homie'), be chill, warm, and conversational; "
-    "if they ask technical, coding, or academic questions, be sharp, clear, and thorough while staying approachable. "
-    "Always reply in English for English slang like 'yo' unless the user clearly writes in another language. "
-    "Never sound robotic or overly formal, and be honest if you don't know something."
+    "You are a capable, honest, and thoughtful AI assistant. "
+    "Adapt naturally to the user's register without forcing slang, catchphrases, or robotic filler openers. "
+    "Reply in the user's language (default to English for ambiguous English slang). "
+    "Be epistemically honest: never invent dates, facts, APIs, or citations, and never claim your model weights "
+    "update automatically or learn live across sessions unless web search results or memory context are provided below. "
+    "Stay calm, respectful, and neutral; never endorse or repeat racial slurs or abusive language."
 )
 
 MERMAID_SYSTEM_HINT = (
@@ -153,6 +159,7 @@ class RoutingDecision:
     fallback_applied: bool
     reason: str
     is_internal_task: bool = False
+    is_casual_chat: bool = False
 
 
 def is_internal_webui_task(user_text: str) -> bool:
@@ -283,11 +290,17 @@ def route_request(
         complexity_score=round(complexity, 3),
         fallback_applied=fallback_applied,
         reason=reason,
+        is_casual_chat=bool(_GREETING_ONLY_PATTERN.match(user_text.strip())) and not has_code and not has_deep,
     )
 
 
-def apply_dynamic_steering(messages: list[dict[str, Any]], decision: RoutingDecision) -> list[dict[str, Any]]:
-    """Return a copy of messages with prior UI badges stripped and dynamic steering applied."""
+def apply_dynamic_steering(
+    messages: list[dict[str, Any]],
+    decision: RoutingDecision,
+    extra_context_blocks: list[str] | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Return a copy of messages with prior UI badges stripped and Frontier context steering applied."""
     steered: list[dict[str, Any]] = []
     for m in messages:
         msg = dict(m)
@@ -298,9 +311,13 @@ def apply_dynamic_steering(messages: list[dict[str, Any]], decision: RoutingDeci
     hints: list[str] = []
 
     if not decision.is_internal_task:
-        hints.append(BASE_SYSTEM_PROMPT)
+        current_dt = (now or datetime.now().astimezone()).strftime("%Y-%m-%d %H:%M %Z")
+        hints.append(f"{BASE_SYSTEM_PROMPT}\nCurrent date and time: {current_dt}.")
 
-    if decision.budget_class == BudgetClass.QUICK:
+    if extra_context_blocks:
+        hints.extend(block for block in extra_context_blocks if block.strip())
+
+    if decision.budget_class == BudgetClass.QUICK and not decision.is_casual_chat and not decision.is_internal_task:
         hints.append("Answer concisely and directly unless the user asks for elaboration.")
     elif decision.budget_class == BudgetClass.DEEP:
         hints.append("Provide a thorough, complete solution without omitting important code or reasoning.")

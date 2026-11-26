@@ -9,7 +9,10 @@ import time
 from typing import Any
 
 import numpy as np
-import redis.asyncio as aioredis
+try:
+    import redis.asyncio as aioredis
+except ImportError:  # pragma: no cover - optional for local unit tests
+    aioredis = None  # type: ignore[assignment]
 
 from app.config import settings
 from app.router import semantic_scorer
@@ -27,6 +30,10 @@ class CacheAndQuotaManager:
         self._redis: aioredis.Redis | None = None
 
     async def connect(self) -> None:
+        if aioredis is None:
+            logger.warning("redis package not installed; caching and quotas disabled.")
+            self._redis = None
+            return
         try:
             self._redis = aioredis.from_url(settings.redis_url, decode_responses=True)
             await self._redis.ping()
@@ -38,6 +45,10 @@ class CacheAndQuotaManager:
     async def close(self) -> None:
         if self._redis is not None:
             await self._redis.aclose()
+
+    @property
+    def redis(self) -> aioredis.Redis | None:
+        return self._redis
 
     @staticmethod
     def _exact_key(model_tier: str, prompt: str) -> str:

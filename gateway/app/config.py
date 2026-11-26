@@ -35,9 +35,14 @@ class Settings(BaseSettings):
     user_token_quota: int = 10000
     quota_window_seconds: int = 900
 
-    # UX Telemetry
+    # UX Telemetry & Frontier Features
     enable_routing_badge: bool = False
     enable_think_steering: bool = True
+    enable_auto_web_search: bool = True
+    enable_long_term_memory: bool = True
+    web_search_max_results: int = 3
+    memory_max_items_per_user: int = 50
+    memory_recall_top_k: int = 4
 
 
 settings = Settings()

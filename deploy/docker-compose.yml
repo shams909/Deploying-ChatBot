@@ -28,6 +28,8 @@ services:
       - OPENAI_API_KEY=labai-local-key
       - ENABLE_OLLAMA_API=false
       - ENABLE_FORWARD_USER_INFO_HEADERS=true
+      - ENABLE_CODE_INTERPRETER=true
+      - ENABLE_MEMORY=false
       - ENABLE_RAG_WEB_SEARCH=true
       - RAG_WEB_SEARCH_ENGINE=searxng
       - SEARXNG_QUERY_URL=http://searxng:8080/search?q=<query>
@@ -58,9 +60,12 @@ services:
       - LABAI_TIER3_URL=http://${WORKER_IP:-192.168.9.135}:8083
       - LABAI_REDIS_URL=redis://redis:6379/0
       - LABAI_SEARXNG_URL=http://searxng:8080
-      - LABAI_ENABLE_ROUTING_BADGE=${LABAI_ENABLE_ROUTING_BADGE:-true}
+      - LABAI_ENABLE_ROUTING_BADGE=${LABAI_ENABLE_ROUTING_BADGE:-false}
       - LABAI_ENABLE_THINK_STEERING=${LABAI_ENABLE_THINK_STEERING:-true}
+      - LABAI_ENABLE_AUTO_WEB_SEARCH=${LABAI_ENABLE_AUTO_WEB_SEARCH:-true}
+      - LABAI_ENABLE_LONG_TERM_MEMORY=${LABAI_ENABLE_LONG_TERM_MEMORY:-true}
       - LABAI_USER_TOKEN_QUOTA=${LABAI_USER_TOKEN_QUOTA:-10000}
+      - TZ=${TZ:-Asia/Dhaka}
     depends_on:
       - redis
     networks:
