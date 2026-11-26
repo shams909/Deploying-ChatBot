@@ -261,7 +261,7 @@ async def chat_completions(
         want_web, want_img = might_need_tools(user_prompt)
         has_urls = bool(extract_urls(user_prompt))
         recalled_memory, url_context = await asyncio.gather(
-            recall_memories(user_id, user_prompt),
+            recall_memories(user_id, user_prompt) if not decision.is_casual_chat else asyncio.sleep(0, result=None),
             fetch_prompt_urls(backend_manager.client, user_prompt) if has_urls else asyncio.sleep(0, result=None),
         )
         if recalled_memory:

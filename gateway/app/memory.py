@@ -109,7 +109,7 @@ async def recall_memories(user_id: str, query_text: str) -> str | None:
             if not vec_list:
                 continue
             sim = float(np.dot(query_vec, np.array(vec_list, dtype=np.float32)))
-            if sim >= 0.32:
+            if sim >= 0.46:
                 scored.append((sim, it["fact"]))
         scored.sort(key=lambda x: x[0], reverse=True)
         selected = [fact for _, fact in scored[: settings.memory_recall_top_k]]
