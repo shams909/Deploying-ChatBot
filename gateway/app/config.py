@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     quota_window_seconds: int = 900
 
     # UX Telemetry
-    enable_routing_badge: bool = True
+    enable_routing_badge: bool = False
     enable_think_steering: bool = True
 
 

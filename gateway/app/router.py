@@ -79,7 +79,8 @@ _ANCHOR_PROTOTYPES = {
 
 MERMAID_SYSTEM_HINT = (
     "When drawing a diagram, output a valid ```mermaid``` code block (flowchart TD, sequenceDiagram, "
-    "classDiagram, or erDiagram). Quote node labels containing parentheses or brackets."
+    "classDiagram, or erDiagram). ALWAYS wrap every node label in double quotes like "
+    'A["Load Balancer (Nginx)"] — NEVER leave parentheses or colons unquoted like A[Load Balancer (Nginx)].'
 )
 
 
