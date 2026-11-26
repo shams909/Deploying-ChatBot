@@ -119,6 +119,19 @@ def test_memory_commands_and_chat_scoped_deletion(monkeypatch):
         assert cleared is not None and "Cleared 1" in cleared
         assert await list_memories("u1") == []
 
+        # Unrelated queries must not leak saved technical memories into fresh casual chats
+        await fake_redis.rpush(
+            key,
+            json.dumps({"id": "3", "fact": "User is designing a Redis diagram", "chat_id": "c3", "vec": None, "created_at": 3}),
+        )
+        from app.memory import recall_memories
+        from app.router import semantic_scorer
+
+        monkeypatch.setattr(semantic_scorer, "embed", lambda _txt: None)
+        assert await recall_memories("u1", "hey babe miss you") is None
+        recalled = await recall_memories("u1", "update my redis diagram")
+        assert recalled is not None and "Redis diagram" in recalled
+
     asyncio.run(run())
 
 

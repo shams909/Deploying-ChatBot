@@ -93,6 +93,13 @@ async def handle_memory_command(user_id: str, user_text: str) -> str | None:
     return None
 
 
+_MEMORY_STOPWORDS = frozenset({
+    "the", "and", "for", "that", "this", "with", "you", "your", "are", "was", "were",
+    "have", "has", "had", "not", "but", "can", "will", "just", "like", "what", "when",
+    "where", "who", "how", "why", "from", "about", "into", "they", "them", "then",
+})
+
+
 async def recall_memories(user_id: str, query_text: str) -> str | None:
     if not settings.enable_long_term_memory or not query_text.strip():
         return None
@@ -109,16 +116,24 @@ async def recall_memories(user_id: str, query_text: str) -> str | None:
             if not vec_list:
                 continue
             sim = float(np.dot(query_vec, np.array(vec_list, dtype=np.float32)))
-            if sim >= 0.46:
+            # bge-small baseline for unrelated sentences sits around 0.45-0.55; require >= 0.62
+            if sim >= 0.62:
                 scored.append((sim, it["fact"]))
         scored.sort(key=lambda x: x[0], reverse=True)
         selected = [fact for _, fact in scored[: settings.memory_recall_top_k]]
     else:
-        selected = [it["fact"] for it in items[: settings.memory_recall_top_k]]
+        q_tokens = {w for w in re.findall(r"[a-z0-9]{3,}", query_text.lower()) if w not in _MEMORY_STOPWORDS}
+        if q_tokens:
+            for it in items:
+                f_tokens = {w for w in re.findall(r"[a-z0-9]{3,}", it["fact"].lower()) if w not in _MEMORY_STOPWORDS}
+                if q_tokens & f_tokens:
+                    selected.append(it["fact"])
+                    if len(selected) >= settings.memory_recall_top_k:
+                        break
 
     if not selected:
         return None
-    return "Relevant long-term context remembered from past chats (do not mention unless helpful):\n" + "\n".join(
+    return "Optional background about the user (ignore completely unless directly relevant to the current message):\n" + "\n".join(
         f"- {fact}" for fact in selected
     )
 
