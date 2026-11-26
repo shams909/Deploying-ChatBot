@@ -29,6 +29,8 @@ def test_frontier_prompt_injects_date_and_skips_slang_and_clipped_greetings(monk
 def test_web_search_and_image_intent_detection():
     assert needs_web_search("What is the latest Python release in 2026?") is True
     assert needs_web_search("Search online for today's weather in Dhaka") is True
+    assert needs_web_search("What is today's date?") is False
+    assert needs_web_search("What is the current time right now?") is False
     assert needs_web_search("Write a Python function to reverse a string") is False
     assert needs_web_search("hey") is False
 

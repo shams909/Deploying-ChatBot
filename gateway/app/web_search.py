@@ -29,6 +29,10 @@ _DIAGRAM_EXCLUSION = re.compile(
     r"\b(diagram|flowchart|sequence diagram|class diagram|er diagram|mermaid|mindmap)\b",
     re.IGNORECASE,
 )
+_CLOCK_ONLY_PATTERN = re.compile(
+    r"^[\w\s,'?!.]*\b(what('?s| is)?\s+(the\s+)?(today('?s)?|current\s+)?(date|time|day)|today('?s)?\s+date)\b[\w\s,'?!.]*$",
+    re.IGNORECASE,
+)
 
 
 class _TextExtractor(HTMLParser):
@@ -67,6 +71,8 @@ def extract_clean_text(html_body: str, max_chars: int = 900) -> str:
 
 def needs_web_search(user_text: str) -> bool:
     if not settings.enable_auto_web_search or not user_text or len(user_text.strip()) < 6:
+        return False
+    if _CLOCK_ONLY_PATTERN.match(user_text.strip()) and not re.search(r"\b(news|weather|price|stock|release|version|won)\b", user_text, re.IGNORECASE):
         return False
     return bool(_WEB_INTENT_PATTERN.search(user_text))
 
