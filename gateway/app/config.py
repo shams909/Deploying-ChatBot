@@ -16,7 +16,8 @@ class Settings(BaseSettings):
     # Routing & Caching
     enable_semantic_embedder: bool = True
     embedder_model: str = "BAAI/bge-small-en-v1.5"
-    semantic_cache_threshold: float = 0.92
+    semantic_cache_threshold: float = 0.88
+    cache_max_temperature: float = 0.85
     semantic_cache_ttl_seconds: int = 86400
     semantic_cache_max_entries: int = 250
 

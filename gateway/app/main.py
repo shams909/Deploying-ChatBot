@@ -244,6 +244,7 @@ async def chat_completions(
                 user_prompt=user_prompt,
                 is_single_turn=is_single_turn,
                 temperature=req.temperature,
+                cache_status=cache_status,
             ),
             media_type="text/event-stream",
         )
@@ -256,7 +257,7 @@ async def chat_completions(
         output_tokens = int(data.get("usage", {}).get("completion_tokens", max(1, len(content) // 4)))
         TOKEN_COUNTER.labels(tier=decision.target_tier.value).inc(output_tokens)
         await cache_manager.store_response(decision.target_tier.value, user_prompt, content, is_single_turn, req.temperature)
-        data["choices"][0]["message"]["content"] = f"{_routing_badge(decision, 'MISS')}{content}"
+        data["choices"][0]["message"]["content"] = f"{_routing_badge(decision, cache_status)}{content}"
         data["model"] = req.model
         return data
     finally:
@@ -294,13 +295,14 @@ async def _stream_upstream(
     user_prompt: str,
     is_single_turn: bool,
     temperature: float,
+    cache_status: str,
 ) -> AsyncIterator[str]:
     start_ts = time.perf_counter()
     first_token_ts: float | None = None
     token_count = 0
     collected_parts: list[str] = []
 
-    badge = _routing_badge(decision, "MISS")
+    badge = _routing_badge(decision, cache_status)
     if badge:
         yield _sse_chunk(chunk_id, req_model, content=badge)
 

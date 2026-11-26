@@ -51,7 +51,7 @@ class CacheAndQuotaManager:
         is_single_turn: bool,
         temperature: float,
     ) -> tuple[str | None, str]:
-        if self._redis is None or not is_single_turn or temperature > 0.5 or not prompt.strip():
+        if self._redis is None or not is_single_turn or temperature > settings.cache_max_temperature or not prompt.strip():
             return None, "BYPASS"
 
         try:
@@ -94,7 +94,7 @@ class CacheAndQuotaManager:
         if (
             self._redis is None
             or not is_single_turn
-            or temperature > 0.5
+            or temperature > settings.cache_max_temperature
             or not prompt.strip()
             or len(response_text) < 8
         ):
