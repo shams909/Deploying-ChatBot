@@ -20,6 +20,8 @@ logger = logging.getLogger("labai.memory")
 
 _MEM_KEY_PREFIX = "labai:memory:"
 _MEM_DISABLED_PREFIX = "labai:memory:disabled:"
+_PERSONA_PREFIX = "labai:persona:"
+_TEMP_MODE_PREFIX = "labai:temp_mode:"
 _FORGET_PHRASE = re.compile(r"^(?:please\s+)?forget\s+(?:everything|all(?:\s+memories)?)\s*(?:you\s+remember\s+about\s+me)?[.!]?$", re.IGNORECASE)
 
 
@@ -29,6 +31,39 @@ def _mem_key(user_id: str) -> str:
 
 def _mem_disabled_key(user_id: str) -> str:
     return f"{_MEM_DISABLED_PREFIX}{user_id}"
+
+
+def _persona_key(user_id: str) -> str:
+    return f"{_PERSONA_PREFIX}{user_id}"
+
+
+def _temp_mode_key(user_id: str) -> str:
+    return f"{_TEMP_MODE_PREFIX}{user_id}"
+
+
+async def get_persona(user_id: str) -> str | None:
+    """Return user's saved personalization instructions if set."""
+    redis = cache_manager.redis
+    if redis is None:
+        return None
+    try:
+        val = await redis.get(_persona_key(user_id))
+        return val.strip() if isinstance(val, str) and val.strip() else None
+    except Exception:
+        return None
+
+
+async def is_temp_chat(user_id: str, chat_id: str | None, has_webui_user: bool = False) -> bool:
+    """Return True when OpenWebUI Temporary Chat is active or user toggled temp mode on."""
+    if has_webui_user and (not chat_id or str(chat_id).startswith("local:")):
+        return True
+    redis = cache_manager.redis
+    if redis is None:
+        return False
+    try:
+        return bool(await redis.get(_temp_mode_key(user_id)))
+    except Exception:
+        return False
 
 
 async def is_memory_enabled(user_id: str) -> bool:
@@ -113,6 +148,47 @@ async def handle_memory_command(user_id: str, user_text: str) -> str | None:
         if redis is not None:
             await redis.delete(_mem_disabled_key(user_id))
         return "Cross-chat memory is now **ON** for your account (`memory off` to pause anytime)."
+
+    if norm in ("temp", "temp status", "incognito"):
+        active = await is_temp_chat(user_id, None, has_webui_user=False)
+        state = "ON (no memories saved or recalled; personalization still active)" if active else "OFF"
+        return f"Temporary chat mode is **{state}**.\n\n*Commands: `temp on`, `temp off`, `persona <style>`*"
+
+    if norm in ("temp on", "incognito on"):
+        redis = cache_manager.redis
+        if redis is not None:
+            await redis.set(_temp_mode_key(user_id), "1")
+        return "Temporary chat mode is now **ON** (no chat memories recalled or saved; your `persona` stays active; `temp off` to exit)."
+
+    if norm in ("temp off", "incognito off"):
+        redis = cache_manager.redis
+        if redis is not None:
+            await redis.delete(_temp_mode_key(user_id))
+        return "Temporary chat mode is now **OFF**."
+
+    if norm in ("persona", "persona show"):
+        current = await get_persona(user_id)
+        if not current:
+            return (
+                "No custom personalization saved yet.\n\n"
+                "*Set one anytime with `persona <how you want me to talk & behave>`, or `persona clear` to remove.*"
+            )
+        return f"**Saved Personalization:**\n> {current}\n\n*Update with `persona <new instructions>` or clear with `persona clear`.*"
+
+    if norm in ("persona clear", "persona reset", "persona off"):
+        redis = cache_manager.redis
+        if redis is not None:
+            await redis.delete(_persona_key(user_id))
+        return "Cleared your custom personalization."
+
+    if norm.startswith(("persona ", "persona:")):
+        body = text.split(":", 1)[1].strip() if norm.startswith("persona:") else text.split(None, 1)[1].strip()
+        if not body:
+            return "Usage: `persona <how you want me to behave>`"
+        redis = cache_manager.redis
+        if redis is not None:
+            await redis.set(_persona_key(user_id), body[:800])
+        return f"Saved your personalization (applies in both regular and Temporary chats):\n> {body[:800]}"
 
     if norm.startswith("memory delete "):
         arg = text.split(None, 2)[-1].strip()

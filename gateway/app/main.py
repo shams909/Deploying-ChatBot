@@ -21,7 +21,9 @@ from app.config import settings
 from app.memory import (
     delete_memories,
     extract_and_save_memories,
+    get_persona,
     handle_memory_command,
+    is_temp_chat,
     list_memories,
     recall_memories,
 )
@@ -259,14 +261,20 @@ async def chat_completions(
     has_urls = False
     recalled_memory: str | None = None
     url_context: str | None = None
+    persona_block: str | None = None
+    temp_mode = False
 
     if not decision.is_internal_task:
         want_web, want_img = might_need_tools(user_prompt)
         has_urls = bool(extract_urls(user_prompt))
-        recalled_memory, url_context = await asyncio.gather(
-            recall_memories(user_id, user_prompt) if not decision.is_casual_chat else asyncio.sleep(0, result=None),
+        temp_mode = await is_temp_chat(user_id, x_openwebui_chat_id, has_webui_user=bool(x_openwebui_user_id))
+        persona_raw, recalled_memory, url_context = await asyncio.gather(
+            get_persona(user_id),
+            recall_memories(user_id, user_prompt) if (not decision.is_casual_chat and not temp_mode) else asyncio.sleep(0, result=None),
             fetch_prompt_urls(backend_manager.client, user_prompt) if has_urls else asyncio.sleep(0, result=None),
         )
+        if persona_raw:
+            persona_block = f"User personalization preferences (follow naturally in all chats):\n{persona_raw}"
         if recalled_memory:
             MEMORY_RECALL_COUNTER.inc()
         if url_context:
@@ -279,7 +287,13 @@ async def chat_completions(
         is_grounded=bool(url_context or want_web),
     )
 
-    is_cacheable = is_single_turn and not (want_web or want_img or has_urls or has_images) and not recalled_memory
+    is_cacheable = (
+        is_single_turn
+        and not temp_mode
+        and not (want_web or want_img or has_urls or has_images)
+        and not recalled_memory
+        and not persona_block
+    )
     cached_text, cache_status = await cache_manager.lookup_response(
         model_tier=decision.target_tier.value,
         prompt=user_prompt,
@@ -295,7 +309,7 @@ async def chat_completions(
         badge = _routing_badge(decision, cache_status)
         return _direct_reply(chunk_id, req.model, f"{badge}{cached_text}", req.stream)
 
-    extra_blocks = [b for b in (recalled_memory, url_context) if b]
+    extra_blocks = [b for b in (persona_block, recalled_memory, url_context) if b]
     steered_messages = apply_dynamic_steering(req.messages, decision, extra_context_blocks=extra_blocks)
     if has_images:
         tier_has_native_vision = (
@@ -348,6 +362,8 @@ async def chat_completions(
         "chat_template_kwargs": {"enable_thinking": decision.enable_thinking},
     }
 
+    save_memories = not decision.is_internal_task and not decision.is_casual_chat and not temp_mode
+
     if req.stream:
         return StreamingResponse(
             _stream_upstream(
@@ -363,6 +379,7 @@ async def chat_completions(
                 temperature=eff_temp,
                 cache_status=cache_status,
                 verified_images=verified_images,
+                save_memories=save_memories,
             ),
             media_type="text/event-stream",
         )
@@ -376,7 +393,7 @@ async def chat_completions(
         output_tokens = int(data.get("usage", {}).get("completion_tokens", max(1, len(content) // 4)))
         TOKEN_COUNTER.labels(tier=decision.target_tier.value).inc(output_tokens)
         await cache_manager.store_response(decision.target_tier.value, user_prompt, content, is_cacheable, eff_temp)
-        if not decision.is_internal_task and not decision.is_casual_chat:
+        if save_memories:
             asyncio.create_task(extract_and_save_memories(user_id, x_openwebui_chat_id, user_prompt))
         data["choices"][0]["message"]["content"] = f"{_routing_badge(decision, cache_status)}{content}"
         data["model"] = req.model
@@ -597,6 +614,7 @@ async def _stream_upstream(
     temperature: float,
     cache_status: str,
     verified_images: list[dict[str, str]] | None = None,
+    save_memories: bool = True,
 ) -> AsyncIterator[str]:
     start_ts = time.perf_counter()
     first_token_ts: float | None = None
@@ -668,7 +686,7 @@ async def _stream_upstream(
             is_cacheable,
             temperature,
         )
-        if not decision.is_internal_task and not decision.is_casual_chat:
+        if save_memories:
             asyncio.create_task(extract_and_save_memories(user_id, chat_id, user_prompt))
     except Exception as exc:
         logger.error("Upstream stream failed on %s: %s", decision.target_tier.value, exc)

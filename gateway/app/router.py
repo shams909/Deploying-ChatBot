@@ -344,13 +344,13 @@ def route_request(
                 target_tier = ModelTier.FAST
                 reason = "auto-vision-tier1"
         elif complexity < 0.35:
-            if turns >= 2 and is_conversational:
-                # 2B falls into survey/chatbot habits across multi-turn roleplay; promote ongoing conversation to 4B
-                target_tier = ModelTier.REASONING
-                reason = "auto-conversational-depth"
-            else:
+            if turns == 1 and (is_casual or _QUICK_PATTERN.match(user_text.strip())):
                 target_tier = ModelTier.FAST
                 reason = "auto-simple"
+            else:
+                # Route multi-turn chat & expressive Turn-1 prompts to 4B instead of 2B
+                target_tier = ModelTier.REASONING
+                reason = "auto-conversational-depth"
         elif complexity < 0.68:
             target_tier = ModelTier.REASONING
             reason = "auto-reasoning"

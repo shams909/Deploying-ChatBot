@@ -156,6 +156,21 @@ def test_memory_commands_and_chat_scoped_deletion(monkeypatch):
         meta_empty = await recall_memories("u1", "what do u remeber bout me")
         assert meta_empty is not None and "No personal facts are saved" in meta_empty
 
+        # Personalization + Temporary chat mode
+        from app.memory import get_persona, is_temp_chat
+
+        p_reply = await handle_memory_command("u1", "persona call me boss and keep banter playful")
+        assert p_reply is not None and "call me boss" in p_reply
+        assert await get_persona("u1") == "call me boss and keep banter playful"
+        assert await is_temp_chat("u1", "local:temp-123", has_webui_user=True) is True
+        assert await is_temp_chat("u1", "chat-uuid-1", has_webui_user=True) is False
+        await handle_memory_command("u1", "temp on")
+        assert await is_temp_chat("u1", "chat-uuid-1", has_webui_user=True) is True
+        assert await get_persona("u1") == "call me boss and keep banter playful"
+        await handle_memory_command("u1", "temp off")
+        await handle_memory_command("u1", "persona clear")
+        assert await get_persona("u1") is None
+
     asyncio.run(run())
 
 
