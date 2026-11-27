@@ -267,10 +267,10 @@ def test_grok_modes_route_and_steer_cleanly(monkeypatch):
     )
     assert seductive.target_tier == ModelTier.REASONING
     assert seductive.reason == "mode-labai-seductive"
-    assert seductive.recommended_temperature == 0.78
+    assert seductive.recommended_temperature == 0.87
     assert seductive.enable_thinking is False
     steered = apply_dynamic_steering([{"role": "user", "content": "miss u tonight"}], seductive)
-    assert "horny woman" in steered[0]["content"]
+    assert "Leila" in steered[0]["content"]
     assert "tell me what you'd do" not in steered[0]["content"].lower()
 
     desc = route_request(

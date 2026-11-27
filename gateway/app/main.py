@@ -29,6 +29,7 @@ from app.memory import (
 )
 from app.router import (
     PUBLIC_MODELS,
+    MODE_CONFIGS,
     BudgetClass,
     ModelTier,
     RoutingDecision,
@@ -351,6 +352,10 @@ async def chat_completions(
             is_grounded=True,
         )
     freq_penalty, repeat_penalty, min_p = resolve_repetition_params(decision, is_grounded=is_grounded_final)
+    # Allow per-mode repeat_penalty override (e.g. seductive → 1.10 to break triplet loops on Gemma 3 4B)
+    _mode_cfg = MODE_CONFIGS.get(req.model)
+    if _mode_cfg and "repeat_penalty" in _mode_cfg:
+        repeat_penalty = float(_mode_cfg["repeat_penalty"])
 
     payload_messages = (
         trim_messages_for_ctx(steered_messages)
