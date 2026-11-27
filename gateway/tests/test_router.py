@@ -271,6 +271,17 @@ def test_grok_modes_route_and_steer_cleanly(monkeypatch):
     assert seductive.enable_thinking is False
     steered = apply_dynamic_steering([{"role": "user", "content": "miss u tonight"}], seductive)
     assert "horny woman" in steered[0]["content"]
+    assert "tell me what you'd do" not in steered[0]["content"].lower()
+
+    desc = route_request(
+        requested_model="labai-seductive",
+        messages=[{"role": "user", "content": "like with extensive description naming everything"}],
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=0,
+    )
+    assert desc.budget_class == BudgetClass.STANDARD
+    assert desc.max_tokens == settings.budget_standard_tokens
 
     strategist = route_request(
         requested_model="labai-strategist",
