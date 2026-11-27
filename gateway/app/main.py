@@ -362,6 +362,9 @@ async def chat_completions(
         "max_tokens": decision.max_tokens,
         "chat_template_kwargs": {"enable_thinking": decision.enable_thinking},
     }
+    if decision.is_conversational and not is_grounded_final:
+        # Extend llama.cpp's 64-token default lookback so the model cannot copy the prior reply verbatim
+        upstream_payload["repeat_last_n"] = 256
 
     save_memories = not decision.is_internal_task and not decision.is_casual_chat and not temp_mode
 
