@@ -152,6 +152,12 @@ def test_memory_commands_and_chat_scoped_deletion(monkeypatch):
         on_msg = await handle_memory_command("u1", "!memory on")
         assert on_msg is not None and "ON" in on_msg
         assert await recall_memories("u1", "update my redis diagram") is not None
+        assert "Cleared 1" in (await handle_memory_command("u1", "/clear memory") or "")
+        assert await list_memories("u1") == []
+        await fake_redis.rpush(
+            key,
+            json.dumps({"id": "3", "fact": "User is designing a Redis diagram", "chat_id": "c3", "vec": None, "created_at": 3}),
+        )
 
         # Explicit recall questions ("what do u remember bout me") surface saved facts or honest empty status
         meta_saved = await recall_memories("u1", "what do u remeber bout me")

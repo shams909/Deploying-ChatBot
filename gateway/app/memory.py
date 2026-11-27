@@ -133,7 +133,7 @@ async def handle_memory_command(user_id: str, user_text: str) -> str | None:
             + "\n\n*Use `memory delete <number>`, `memory clear`, `memory off`, or `memory on` anytime.*"
         )
 
-    if norm in ("memory clear", "memory reset") or _FORGET_PHRASE.match(text):
+    if norm in ("memory clear", "memory reset", "clear memory", "clear memories", "reset memory") or _FORGET_PHRASE.match(text):
         count = await delete_memories(user_id)
         return f"Cleared {count} saved cross-chat {'memory' if count == 1 else 'memories'}."
 
