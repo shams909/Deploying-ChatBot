@@ -6,9 +6,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LABAI_", env_file=".env", extra="ignore")
 
-    tier1_url: str = "http://127.0.0.1:8081"
+    tier1_url: str = "http://127.0.0.1:8082"
     tier2_url: str = "http://127.0.0.1:8082"
     tier3_url: str = "http://192.168.9.135:8083"
+    tier1_supports_thinking: bool = False
+    tier2_supports_thinking: bool = False
+    tier3_supports_thinking: bool = True
 
     redis_url: str = "redis://127.0.0.1:6379/0"
     searxng_url: str = "http://127.0.0.1:8080"
@@ -29,7 +32,7 @@ class Settings(BaseSettings):
     hard_max_tokens: int = 4096
 
     # Concurrency, Quotas & Circuit Breaker
-    node1_max_concurrent: int = 1
+    node1_max_concurrent: int = 3
     node2_queue_limit: int = 2
     circuit_breaker_failures: int = 3
     circuit_breaker_cooldown_seconds: int = 30

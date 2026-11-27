@@ -39,6 +39,8 @@ from app.router import (
     resolve_sampling_params,
     route_request,
     strip_image_attachments,
+    supports_thinking,
+    trim_messages_for_ctx,
 )
 from app.web_search import (
     TOOLS_SCHEMA,
@@ -206,9 +208,9 @@ def _routing_badge(decision: RoutingDecision, cache_status: str) -> str:
     if not settings.enable_routing_badge or decision.is_internal_task:
         return ""
     tier_label = {
-        ModelTier.FAST: "Fast (2B)",
-        ModelTier.REASONING: "Reasoning (4B)",
-        ModelTier.PRO: "Pro (9B)",
+        ModelTier.FAST: "Node01 (Gemma-3-4B)",
+        ModelTier.REASONING: "Node01 (Gemma-3-4B)",
+        ModelTier.PRO: "Node02 Pro (Qwen3.5-9B)",
     }[decision.target_tier]
     fb = " • Fallback" if decision.fallback_applied else ""
     return f"> *LabAI → `{tier_label}` • Budget: `{decision.budget_class.value}` (`{decision.max_tokens}`) • Cache: `{cache_status}`{fb}*\n\n"
@@ -294,6 +296,7 @@ async def chat_completions(
         and not (want_web or want_img or has_urls or has_images)
         and not recalled_memory
         and not persona_block
+        and not decision.mode_prompt
     )
     cached_text, cache_status = await cache_manager.lookup_response(
         model_tier=decision.target_tier.value,
@@ -349,9 +352,15 @@ async def chat_completions(
         )
     freq_penalty, repeat_penalty, min_p = resolve_repetition_params(decision, is_grounded=is_grounded_final)
 
+    payload_messages = (
+        trim_messages_for_ctx(steered_messages)
+        if decision.target_tier != ModelTier.PRO
+        else steered_messages
+    )
+
     upstream_payload = {
         "model": decision.target_tier.value,
-        "messages": steered_messages,
+        "messages": payload_messages,
         "stream": req.stream,
         "temperature": eff_temp,
         "top_p": req.top_p,
@@ -360,8 +369,9 @@ async def chat_completions(
         "frequency_penalty": freq_penalty,
         "repeat_penalty": repeat_penalty,
         "max_tokens": decision.max_tokens,
-        "chat_template_kwargs": {"enable_thinking": decision.enable_thinking},
     }
+    if supports_thinking(decision.target_tier):
+        upstream_payload["chat_template_kwargs"] = {"enable_thinking": decision.enable_thinking}
     if decision.is_conversational and not is_grounded_final:
         # Extend llama.cpp's 64-token default lookback so the model cannot copy the prior reply verbatim
         upstream_payload["repeat_last_n"] = 256
@@ -423,7 +433,7 @@ async def _handle_image_on_text_tier(steered_messages: list[dict[str, Any]], use
         v_url, v_tier = vision_backend
         image_msgs = [m for m in steered_messages if isinstance(m.get("content"), list)]
         if image_msgs:
-            vision_payload = {
+            vision_payload: dict[str, Any] = {
                 "model": v_tier.value,
                 "messages": [
                     {
@@ -435,8 +445,9 @@ async def _handle_image_on_text_tier(steered_messages: list[dict[str, Any]], use
                 "stream": False,
                 "temperature": 0.1,
                 "max_tokens": 700,
-                "chat_template_kwargs": {"enable_thinking": False},
             }
+            if supports_thinking(v_tier):
+                vision_payload["chat_template_kwargs"] = {"enable_thinking": False}
             try:
                 data = await _call_non_streaming(f"{v_url}/v1/chat/completions", vision_payload, v_tier)
                 desc = data["choices"][0]["message"].get("content", "").strip()
@@ -466,14 +477,15 @@ async def _refine_borderline_decision(
         "- HARD: deep multi-step architecture, formal proofs, advanced multi-domain synthesis, complex audits.\n\n"
         f"Request: {user_prompt[:350]}\nLabel:"
     )
-    payload = {
+    payload: dict[str, Any] = {
         "model": ModelTier.FAST.value,
         "messages": [{"role": "user", "content": judge_prompt}],
         "stream": False,
         "temperature": 0.0,
         "max_tokens": 4,
-        "chat_template_kwargs": {"enable_thinking": False},
     }
+    if supports_thinking(ModelTier.FAST):
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     try:
         async with backend_manager.node1_semaphore:
             resp = await backend_manager.client.post(
@@ -506,9 +518,9 @@ async def _run_tool_planning(
     want_web: bool,
     want_img: bool,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]], str | None]:
-    """Let Qwen3 decide tool calls (web_search/image_search) or fall back cleanly to SearXNG."""
+    """Let Node01 decide tool calls (web_search/image_search) or fall back cleanly to SearXNG."""
     exclude_urls = extract_prior_image_urls(steered_messages)
-    # Tier 1 (2B) runs without mmproj, so always strip image attachments before tool planning
+    # Strip image attachments before text-only tool planning
     plan_messages = strip_image_attachments(steered_messages)
     tool_hint = (
         "You have live tools: web_search(query) and image_search(query). "
@@ -520,7 +532,7 @@ async def _run_tool_planning(
     else:
         plan_messages.insert(0, {"role": "system", "content": tool_hint})
 
-    plan_payload = {
+    plan_payload: dict[str, Any] = {
         "model": ModelTier.FAST.value,
         "messages": plan_messages,
         "tools": TOOLS_SCHEMA,
@@ -528,8 +540,9 @@ async def _run_tool_planning(
         "stream": False,
         "temperature": 0.2,
         "max_tokens": 250,
-        "chat_template_kwargs": {"enable_thinking": False},
     }
+    if supports_thinking(ModelTier.FAST):
+        plan_payload["chat_template_kwargs"] = {"enable_thinking": False}
     fast_url = f"{settings.tier1_url}/v1/chat/completions"
     try:
         # Always run fast tool planning on Tier 1 (4B) instead of stalling Tier 3 (14B)

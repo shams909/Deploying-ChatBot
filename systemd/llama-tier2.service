@@ -1,5 +1,5 @@
 [Unit]
-Description=LabAI Tier 2 Reasoning + Vision Inference (Huihui-Qwen3.5-4B-abliterated)
+Description=LabAI Node01 Daily + Vision Inference (Gemma-3-4B-IT-Abliterated)
 After=network-online.target
 Wants=network-online.target
 
@@ -18,8 +18,8 @@ ExecStart=/opt/llama.cpp/build/bin/llama-server \
   --port 8082 \
   --threads 8 \
   --threads-batch 8 \
-  --ctx-size 4096 \
-  --parallel 1 \
+  --ctx-size 12288 \
+  --parallel 3 \
   --flash-attn on \
   --cache-type-k q8_0 \
   --cache-type-v q8_0 \

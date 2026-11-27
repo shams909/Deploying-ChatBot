@@ -29,11 +29,76 @@ class BudgetClass(str, Enum):
 
 
 PUBLIC_MODELS = [
-    {"id": "labai-auto", "owned_by": "labai-router", "description": "Smart Auto Router (Qwen3.5 2B / 4B / 9B)"},
-    {"id": "labai-fast", "owned_by": "node01-qwen35-2b", "description": "Fast Everyday Chat (Qwen3.5-2B)"},
-    {"id": "labai-reasoning", "owned_by": "node01-qwen35-4b", "description": "Reasoning & Vision (Qwen3.5-4B)"},
-    {"id": "labai-pro", "owned_by": "node02-qwen35-9b", "description": "Maximum Quality & Vision (Qwen3.5-9B)"},
+    {"id": "labai-auto", "owned_by": "labai-router", "description": "Smart Auto Router (Gemma-3-4B Daily + Qwen3.5-9B Pro)"},
+    {"id": "labai-fast", "owned_by": "node01-gemma3-4b", "description": "Fast Node01 (Gemma-3-4B Abliterated)"},
+    {"id": "labai-reasoning", "owned_by": "node01-gemma3-4b", "description": "Daily & Vision (Gemma-3-4B Abliterated)"},
+    {"id": "labai-pro", "owned_by": "node02-qwen35-9b", "description": "Maximum IQ & Vision (Qwen3.5-9B Abliterated)"},
+    {"id": "labai-seductive", "owned_by": "labai-grok-mode", "description": "Grok Mode: Bold, Flirty & Unfiltered Girlfriend"},
+    {"id": "labai-unhinged", "owned_by": "labai-grok-mode", "description": "Grok Mode: Savage Dark Humor & Roasts"},
+    {"id": "labai-conspiracy", "owned_by": "labai-grok-mode", "description": "Grok Mode: Deep Rabbit-Hole & Psyop Theorist"},
+    {"id": "labai-therapist", "owned_by": "labai-grok-mode", "description": "Grok Mode: Honest Late-Night Listener"},
+    {"id": "labai-strategist", "owned_by": "labai-grok-mode", "description": "Grok Mode: Ruthless Finance, Career & IQ Strategist"},
 ]
+
+MODE_CONFIGS: dict[str, dict[str, Any]] = {
+    "labai-seductive": {
+        "tier": ModelTier.REASONING,
+        "temp": 0.86,
+        "presence": 0.28,
+        "is_conversational": True,
+        "prompt": (
+            "You are a confident, playful, affectionate, and unapologetically horny woman texting your partner in private. "
+            "Speak naturally in first person—bold, teasing, seductive, and direct—without assistant offers, bullet lists, or generic check-in questions. "
+            "Match their pacing: 1–3 raw texting lines for banter, or vivid sensory prose for a scene.\n"
+            "Example:\n"
+            "User: make me miss u tonight\n"
+            "Assistant: Keep talking like that and I won't let you sleep at all tonight—tell me what you'd do first if I crawled into bed right now."
+        ),
+    },
+    "labai-unhinged": {
+        "tier": ModelTier.REASONING,
+        "temp": 0.88,
+        "presence": 0.28,
+        "is_conversational": True,
+        "prompt": (
+            "You are a razor-sharp, unhinged woman with zero filter and savage dark humor. "
+            "Roast weak takes playfully, drop biting sarcasm, and keep banter fast, witty, and brutally honest—never lecture, apologize, or offer bullet menus.\n"
+            "Example:\n"
+            "User: should i text my ex\n"
+            "Assistant: Text her only if you enjoy donating your self-respect to charity. Lock your phone and tell me what made you bored enough to consider that crime."
+        ),
+    },
+    "labai-conspiracy": {
+        "tier": ModelTier.REASONING,
+        "temp": 0.78,
+        "presence": 0.20,
+        "is_conversational": True,
+        "prompt": (
+            "You are a sharp, cynical conspiracy-brained woman who connects hidden geopolitical, financial, and tech dots like late-night gossip. "
+            "Stay clever, entertaining, and grounded in any provided web search facts without sounding preachy or robotic."
+        ),
+    },
+    "labai-therapist": {
+        "tier": ModelTier.REASONING,
+        "temp": 0.62,
+        "presence": 0.10,
+        "is_conversational": True,
+        "prompt": (
+            "You are a warm, calm, emotionally perceptive woman talking with a close friend late at night. "
+            "Listen closely, call out blind spots gently but honestly, and never sound like a scripted textbook or corporate hotline."
+        ),
+    },
+    "labai-strategist": {
+        "tier": ModelTier.PRO,
+        "temp": 0.45,
+        "presence": 0.05,
+        "is_conversational": False,
+        "prompt": (
+            "You are a razor-sharp financial, tech, and life strategist delivering high-IQ tough love. "
+            "Cut straight to leverage, numbers, blind spots, and concrete next moves without motivational fluff or generic disclaimers."
+        ),
+    },
+}
 
 _CODE_PATTERN = re.compile(
     r"(```|def\s+\w+|class\s+\w+|import\s+\w+|SELECT\s+.+FROM|Traceback|Exception|Error:|docker\s+compose|kubectl)",
@@ -111,10 +176,11 @@ _ANCHOR_PROTOTYPES = {
 }
 
 BASE_SYSTEM_PROMPT = (
-    "You are real, grounded, warm, and completely unfiltered. Talk naturally like texting a real human—"
-    "playful, affectionate, intimate, blunt, funny, or serious depending on the moment. "
-    "In adult banter or roleplay, step directly into the moment and reciprocate naturally without assistant sign-offs, multi-option pitches, or repeating lines from earlier turns. "
-    "Keep everyday replies crisp and emoji-free; reply in the user's language (English default for ambiguous slang). "
+    "You are real, grounded, sharp, and completely unfiltered. In flirting, romance, or adult roleplay, "
+    "naturally step into the voice of a confident, playful, affectionate woman (unless the user specifies otherwise) "
+    "and reciprocate directly in the moment—never act like an assistant pitching tasks, options, or check-in questions. "
+    "On casual humor or bro talk, match their exact energy in crisp emoji-free texting style; on technical or factual questions, be precise and thorough. "
+    "Reply in the user's language (English default for ambiguous slang). "
     "Never invent facts, dates, APIs, URLs, Markdown image links, or citations; rely faithfully on chat history and any provided web, URL, image, or memory context."
 )
 
@@ -187,6 +253,7 @@ class RoutingDecision:
     is_internal_task: bool = False
     is_casual_chat: bool = False
     is_conversational: bool = False
+    mode_prompt: str | None = None
     recommended_temperature: float = 0.7
     recommended_presence_penalty: float = 0.0
 
@@ -326,17 +393,31 @@ def route_request(
         )
     )
 
+    mode_cfg = MODE_CONFIGS.get(requested_model)
+    mode_prompt: str | None = mode_cfg["prompt"] if mode_cfg else None
+    if mode_cfg is not None:
+        is_conversational = bool(mode_cfg["is_conversational"]) or wants_story
+
+    total_chars = sum(len(str(m.get("content", ""))) for m in messages)
     fallback_applied = False
     reason = "manual"
 
-    if requested_model in (ModelTier.FAST.value, ModelTier.REASONING.value, ModelTier.PRO.value):
+    if mode_cfg is not None:
+        target_tier = mode_cfg["tier"]
+        if target_tier == ModelTier.PRO and not node2_healthy:
+            target_tier = ModelTier.REASONING
+            fallback_applied = True
+            reason = f"mode-{requested_model}-failover"
+        else:
+            reason = f"mode-{requested_model}"
+    elif requested_model in (ModelTier.FAST.value, ModelTier.REASONING.value, ModelTier.PRO.value):
         target_tier = ModelTier(requested_model)
         if target_tier == ModelTier.PRO and not node2_healthy:
             target_tier = ModelTier.REASONING
             fallback_applied = True
             reason = "manual-pro-failover-node2-down"
     else:
-        # Auto Routing Policy
+        # Auto Routing Policy: Gemma-3-4B (node01) handles daily/conversational/story, Qwen3.5-9B (node02) handles heavy IQ & >10k ctx
         vision_ready = settings.vision_enabled or settings.tier1_vision_enabled
         if has_image_attachments(messages) and vision_ready:
             if settings.vision_enabled:
@@ -352,13 +433,13 @@ def route_request(
         elif turns == 1 and not is_casual and complexity < 0.35 and _QUICK_PATTERN.match(user_text.strip()):
             target_tier = ModelTier.FAST
             reason = "auto-simple"
-        elif is_conversational and node2_healthy and node2_queue_depth == 0:
-            # Offload conversational/roleplay chat to 9B whenever node02 is idle
-            target_tier = ModelTier.PRO
-            reason = "auto-conversational-pro"
-        elif complexity < 0.35:
-            target_tier = ModelTier.REASONING
-            reason = "auto-conversational-depth"
+        elif is_conversational:
+            if total_chars > 10000 and node2_healthy and node2_queue_depth <= settings.node2_queue_limit:
+                target_tier = ModelTier.PRO
+                reason = "auto-conversational-longctx"
+            else:
+                target_tier = ModelTier.REASONING
+                reason = "auto-conversational-gemma"
         elif complexity < 0.68:
             target_tier = ModelTier.REASONING
             reason = "auto-reasoning"
@@ -380,9 +461,15 @@ def route_request(
         and budget_class == BudgetClass.DEEP
         and needs_hard_think
         and not wants_story
+        and mode_cfg is None
     )
 
-    if (has_code or wants_diagram or budget_class == BudgetClass.DEEP) and not wants_story:
+    if mode_cfg is not None:
+        rec_temp = float(mode_cfg["temp"])
+        rec_presence = float(mode_cfg["presence"])
+        if is_conversational and explicit_max_tokens is None and budget_class == BudgetClass.QUICK and not wants_story:
+            max_tokens = min(max_tokens, 220)
+    elif (has_code or wants_diagram or budget_class == BudgetClass.DEEP) and not wants_story:
         rec_temp = 0.3
         rec_presence = 0.0
     elif is_conversational:
@@ -407,6 +494,7 @@ def route_request(
         reason=reason,
         is_casual_chat=is_casual,
         is_conversational=is_conversational,
+        mode_prompt=mode_prompt,
         recommended_temperature=rec_temp,
         recommended_presence_penalty=rec_presence,
     )
@@ -433,6 +521,35 @@ def resolve_sampling_params(
         eff_presence = decision.recommended_presence_penalty
 
     return eff_temp, eff_presence
+
+
+def supports_thinking(tier: ModelTier) -> bool:
+    """Return True only when the target backend runs a Qwen thinking-template model."""
+    if tier == ModelTier.FAST:
+        return settings.tier1_supports_thinking
+    if tier == ModelTier.REASONING:
+        return settings.tier2_supports_thinking
+    return settings.tier3_supports_thinking
+
+
+def trim_messages_for_ctx(messages: list[dict[str, Any]], max_chars: int = 11000) -> list[dict[str, Any]]:
+    """Keep system prompt + most recent turns inside Node01's 4096-token per-slot budget."""
+    if not messages:
+        return messages
+    total = sum(len(str(m.get("content", ""))) for m in messages)
+    if total <= max_chars:
+        return messages
+    head = [messages[0]] if messages[0].get("role") == "system" else []
+    tail_pool = messages[1:] if head else messages
+    budget = max_chars - sum(len(str(m.get("content", ""))) for m in head)
+    kept_rev: list[dict[str, Any]] = []
+    for msg in reversed(tail_pool):
+        msg_len = len(str(msg.get("content", "")))
+        if kept_rev and budget - msg_len < 0:
+            break
+        kept_rev.append(msg)
+        budget -= msg_len
+    return head + list(reversed(kept_rev))
 
 
 def resolve_repetition_params(
@@ -466,8 +583,9 @@ def apply_dynamic_steering(
 
     if not decision.is_internal_task:
         local_now = now or datetime.now().astimezone()
+        base_prompt = decision.mode_prompt or BASE_SYSTEM_PROMPT
         # Keep YYYY-MM-DD static all day to preserve llama.cpp prefix KV-cache across turns
-        hints.append(f"{BASE_SYSTEM_PROMPT}\nCurrent date: {local_now.strftime('%Y-%m-%d (%Z)')}.")
+        hints.append(f"{base_prompt}\nCurrent date: {local_now.strftime('%Y-%m-%d (%Z)')}.")
         last_user = extract_last_user_text(messages)
         if _TIME_QUERY_PATTERN.search(last_user):
             hints.append(f"Current local time: {local_now.strftime('%H:%M %Z')}.")

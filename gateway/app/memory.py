@@ -295,14 +295,15 @@ async def extract_and_save_memories(user_id: str, chat_id: str | None, user_text
         'Return ONLY a JSON array of short strings (e.g. ["User works with Python on Linux"]), or [] if none.\n\n'
         f"User message: {user_text[:600]}"
     )
-    payload = {
+    payload: dict[str, Any] = {
         "model": ModelTier.FAST.value,
         "messages": [{"role": "user", "content": extraction_prompt}],
         "stream": False,
         "temperature": 0.1,
         "max_tokens": 120,
-        "chat_template_kwargs": {"enable_thinking": False},
     }
+    if settings.tier1_supports_thinking:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     try:
         async with backend_manager.node1_semaphore:
             resp = await backend_manager.client.post(f"{settings.tier1_url}/v1/chat/completions", json=payload, timeout=15.0)

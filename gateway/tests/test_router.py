@@ -213,8 +213,8 @@ def test_multiturn_conversational_chat_promotes_to_reasoning(monkeypatch):
         node2_healthy=True,
         node2_queue_depth=0,
     )
-    assert decision.target_tier == ModelTier.PRO
-    assert decision.reason == "auto-conversational-pro"
+    assert decision.target_tier == ModelTier.REASONING
+    assert decision.reason == "auto-conversational-gemma"
     assert decision.recommended_temperature == 0.82
     assert decision.recommended_presence_penalty == 0.25
     freq, rep, min_p = resolve_repetition_params(decision, is_grounded=False)
@@ -226,15 +226,15 @@ def test_multiturn_conversational_chat_promotes_to_reasoning(monkeypatch):
     steered = apply_dynamic_steering(history, decision)
     assert "texting-style" in steered[0]["content"]
 
-    busy_decision = route_request(
+    long_history = history + [{"role": "user", "content": "x" * 10500}]
+    long_decision = route_request(
         requested_model="labai-auto",
-        messages=history,
+        messages=long_history,
         explicit_max_tokens=None,
         node2_healthy=True,
-        node2_queue_depth=1,
+        node2_queue_depth=0,
     )
-    assert busy_decision.target_tier == ModelTier.REASONING
-    assert busy_decision.reason == "auto-conversational-depth"
+    assert long_decision.target_tier == ModelTier.PRO
 
 
 def test_story_prompt_unlocks_standard_budget_without_thinking(monkeypatch):
@@ -246,7 +246,7 @@ def test_story_prompt_unlocks_standard_budget_without_thinking(monkeypatch):
         node2_healthy=True,
         node2_queue_depth=0,
     )
-    assert story.target_tier == ModelTier.PRO
+    assert story.target_tier == ModelTier.REASONING
     assert story.budget_class == BudgetClass.STANDARD
     assert story.max_tokens == settings.budget_standard_tokens
     assert story.enable_thinking is False
@@ -254,3 +254,47 @@ def test_story_prompt_unlocks_standard_budget_without_thinking(monkeypatch):
     assert story.recommended_temperature == 0.82
     steered = apply_dynamic_steering([{"role": "user", "content": "Write a bold roleplay story scene"}], story)
     assert "immersive" in steered[0]["content"]
+
+
+def test_grok_modes_route_and_steer_cleanly(monkeypatch):
+    monkeypatch.setattr(settings, "enable_semantic_embedder", False)
+    seductive = route_request(
+        requested_model="labai-seductive",
+        messages=[{"role": "user", "content": "miss u tonight"}],
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=0,
+    )
+    assert seductive.target_tier == ModelTier.REASONING
+    assert seductive.reason == "mode-labai-seductive"
+    assert seductive.recommended_temperature == 0.86
+    assert seductive.enable_thinking is False
+    steered = apply_dynamic_steering([{"role": "user", "content": "miss u tonight"}], seductive)
+    assert "horny woman" in steered[0]["content"]
+
+    strategist = route_request(
+        requested_model="labai-strategist",
+        messages=[{"role": "user", "content": "How should I invest 5k?"}],
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=0,
+    )
+    assert strategist.target_tier == ModelTier.PRO
+    assert strategist.recommended_temperature == 0.45
+
+
+def test_ctx_trimmer_and_thinking_tier_guard():
+    from app.router import supports_thinking, trim_messages_for_ctx
+
+    assert supports_thinking(ModelTier.FAST) is False
+    assert supports_thinking(ModelTier.REASONING) is False
+    assert supports_thinking(ModelTier.PRO) is True
+
+    msgs = [{"role": "system", "content": "sys"}] + [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"turn-{i} " + ("x" * 1000)}
+        for i in range(20)
+    ]
+    trimmed = trim_messages_for_ctx(msgs, max_chars=4500)
+    assert trimmed[0]["role"] == "system"
+    assert trimmed[-1]["content"].startswith("turn-19")
+    assert sum(len(m["content"]) for m in trimmed) <= 4500
