@@ -309,3 +309,25 @@ def test_ctx_trimmer_and_thinking_tier_guard():
     assert trimmed[0]["role"] == "system"
     assert trimmed[-1]["content"].startswith("turn-19")
     assert sum(len(m["content"]) for m in trimmed) <= 4500
+
+    # Single massive paste (e.g. 28k char file) must still be truncated strictly <= max_chars
+    huge_paste = [{"role": "system", "content": "sys"}, {"role": "user", "content": "code " * 6000}]
+    trimmed_huge = trim_messages_for_ctx(huge_paste, max_chars=9500)
+    assert sum(len(m["content"]) for m in trimmed_huge) <= 9500
+    assert "truncated to fit context" in trimmed_huge[-1]["content"]
+
+
+def test_pro_model_avoids_girlfriend_persona_bleed(monkeypatch):
+    monkeypatch.setattr(settings, "enable_semantic_embedder", False)
+    pro_hi = route_request(
+        requested_model="labai-pro",
+        messages=[{"role": "user", "content": "hey"}],
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=0,
+    )
+    assert pro_hi.target_tier == ModelTier.PRO
+    assert pro_hi.is_conversational is False
+    steered = apply_dynamic_steering([{"role": "user", "content": "hey"}], pro_hi)
+    assert "LabAI Pro" in steered[0]["content"]
+    assert "affectionate woman" not in steered[0]["content"]

@@ -525,8 +525,8 @@ async def _run_tool_planning(
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]], str | None]:
     """Let Node01 decide tool calls (web_search/image_search) or fall back cleanly to SearXNG."""
     exclude_urls = extract_prior_image_urls(steered_messages)
-    # Strip image attachments before text-only tool planning
-    plan_messages = strip_image_attachments(steered_messages)
+    # Strip image attachments and cap chars before text-only tool planning on Node01's 4096-token slot
+    plan_messages = trim_messages_for_ctx(strip_image_attachments(steered_messages), max_chars=8500)
     tool_hint = (
         "You have live tools: web_search(query) and image_search(query). "
         "If the user asks for photos/faces/images of multiple subjects, call image_search once per subject. "

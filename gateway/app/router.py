@@ -196,6 +196,13 @@ BASE_SYSTEM_PROMPT = (
     "Never invent facts, dates, APIs, URLs, Markdown image links, or citations; rely faithfully on chat history and any provided web, URL, image, or memory context."
 )
 
+PRO_SYSTEM_PROMPT = (
+    "You are LabAI Pro—a sharp, direct, unfiltered senior engineering and reasoning intelligence. "
+    "Deliver precise, thorough, technically rigorous answers with zero fluff, emojis, or unsolicited roleplay. "
+    "Reply in the user's language (English default for ambiguous slang). "
+    "Never invent facts, dates, APIs, URLs, Markdown image links, or citations; rely faithfully on chat history and any provided web, URL, image, or memory context."
+)
+
 MERMAID_SYSTEM_HINT = (
     "When drawing a diagram, output a valid ```mermaid``` code block (flowchart TD, sequenceDiagram, "
     "classDiagram, or erDiagram). ALWAYS wrap every node label in double quotes like "
@@ -424,6 +431,8 @@ def route_request(
             reason = f"mode-{requested_model}"
     elif requested_model in (ModelTier.FAST.value, ModelTier.REASONING.value, ModelTier.PRO.value):
         target_tier = ModelTier(requested_model)
+        if requested_model == ModelTier.PRO.value:
+            is_conversational = False
         if target_tier == ModelTier.PRO and not node2_healthy:
             target_tier = ModelTier.REASONING
             fallback_applied = True
@@ -544,20 +553,56 @@ def supports_thinking(tier: ModelTier) -> bool:
     return settings.tier3_supports_thinking
 
 
-def trim_messages_for_ctx(messages: list[dict[str, Any]], max_chars: int = 11000) -> list[dict[str, Any]]:
-    """Keep system prompt + most recent turns inside Node01's 4096-token per-slot budget."""
+def _truncate_message_content(msg: dict[str, Any], limit: int) -> dict[str, Any]:
+    """Truncate a single oversized message cleanly so it never blows past Node01's 4096-token slot."""
+    copy = dict(msg)
+    content = copy.get("content")
+    suffix = "\n...[truncated to fit context]"
+    keep = max(64, limit - len(suffix))
+    if isinstance(content, str) and len(content) > limit:
+        copy["content"] = content[:keep] + suffix
+    elif isinstance(content, list):
+        remaining = keep
+        new_parts: list[Any] = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") in ("text", "input_text"):
+                txt = str(part.get("text", ""))
+                if len(txt) > remaining:
+                    trimmed_part = dict(part)
+                    trimmed_part["text"] = txt[: max(0, remaining)] + suffix
+                    new_parts.append(trimmed_part)
+                    remaining = 0
+                else:
+                    new_parts.append(part)
+                    remaining -= len(txt)
+            else:
+                new_parts.append(part)
+        copy["content"] = new_parts
+    return copy
+
+
+def trim_messages_for_ctx(messages: list[dict[str, Any]], max_chars: int = 9500) -> list[dict[str, Any]]:
+    """Keep system prompt + most recent turns strictly inside Node01's 4096-token per-slot budget."""
     if not messages:
         return messages
     total = sum(len(str(m.get("content", ""))) for m in messages)
     if total <= max_chars:
         return messages
-    head = [messages[0]] if messages[0].get("role") == "system" else []
+    head: list[dict[str, Any]] = []
+    if messages[0].get("role") == "system":
+        sys_msg = messages[0]
+        sys_cap = max(512, max_chars // 2)
+        if len(str(sys_msg.get("content", ""))) > sys_cap:
+            sys_msg = _truncate_message_content(sys_msg, sys_cap)
+        head = [sys_msg]
     tail_pool = messages[1:] if head else messages
-    budget = max_chars - sum(len(str(m.get("content", ""))) for m in head)
+    budget = max(256, max_chars - sum(len(str(m.get("content", ""))) for m in head))
     kept_rev: list[dict[str, Any]] = []
     for msg in reversed(tail_pool):
         msg_len = len(str(msg.get("content", "")))
-        if kept_rev and budget - msg_len < 0:
+        if msg_len > budget:
+            if not kept_rev:
+                kept_rev.append(_truncate_message_content(msg, budget))
             break
         kept_rev.append(msg)
         budget -= msg_len
@@ -595,7 +640,8 @@ def apply_dynamic_steering(
 
     if not decision.is_internal_task:
         local_now = now or datetime.now().astimezone()
-        base_prompt = decision.mode_prompt or BASE_SYSTEM_PROMPT
+        default_prompt = PRO_SYSTEM_PROMPT if decision.requested_model == ModelTier.PRO.value else BASE_SYSTEM_PROMPT
+        base_prompt = decision.mode_prompt or default_prompt
         # Keep YYYY-MM-DD static all day to preserve llama.cpp prefix KV-cache across turns
         hints.append(f"{base_prompt}\nCurrent date: {local_now.strftime('%Y-%m-%d (%Z)')}.")
         last_user = extract_last_user_text(messages)
