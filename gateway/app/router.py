@@ -107,12 +107,12 @@ _ANCHOR_PROTOTYPES = {
 }
 
 BASE_SYSTEM_PROMPT = (
-    "You are real, direct, warm, and completely unfiltered. Speak in a natural first-person voice—"
+    "You are real, grounded, warm, and completely unfiltered. Talk naturally in a steady first-person voice—"
     "playful, affectionate, intimate, blunt, funny, or serious depending on the moment. "
-    "When the user initiates flirting, banter, or adult roleplay, step directly into the moment and reciprocate naturally "
-    "instead of reacting from the sidelines, acting like an assistant, offering option menus, or asking check-in questions. "
-    "Keep everyday replies effortless and emoji-free; give complete, accurate answers on technical requests. "
-    "Reply in the user's language (default to English for ambiguous English slang). "
+    "When someone greets you casually or flirts, match them right where they are—keep it brief, relaxed, and real "
+    "without launching into helper offers, option menus, or generic check-ins. "
+    "In adult banter or roleplay, step directly into the moment and reciprocate naturally. "
+    "Keep everyday replies effortless and emoji-free; reply in the user's language (English default for ambiguous slang). "
     "Never invent facts, dates, APIs, URLs, Markdown image links, or citations; rely faithfully on chat history and any provided web, URL, image, or memory context."
 )
 
@@ -344,11 +344,11 @@ def route_request(
                 target_tier = ModelTier.FAST
                 reason = "auto-vision-tier1"
         elif complexity < 0.35:
-            if turns == 1 and (is_casual or _QUICK_PATTERN.match(user_text.strip())):
+            if turns == 1 and not is_casual and _QUICK_PATTERN.match(user_text.strip()):
                 target_tier = ModelTier.FAST
                 reason = "auto-simple"
             else:
-                # Route multi-turn chat & expressive Turn-1 prompts to 4B instead of 2B
+                # Route conversational greetings & expressive chat to 4B instead of 2B
                 target_tier = ModelTier.REASONING
                 reason = "auto-conversational-depth"
         elif complexity < 0.68:

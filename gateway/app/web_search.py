@@ -157,8 +157,8 @@ class _SemanticIntentDetector:
         if qvec is None:
             return False, False
         sims = {k: float(np.dot(qvec, c)) for k, c in self._centroids.items()}
-        web_hit = sims["live_web"] >= 0.48 and sims["live_web"] > sims["static_chat"] + 0.04
-        img_hit = sims["image_lookup"] >= 0.46 and sims["image_lookup"] > sims["static_chat"] + 0.03
+        web_hit = sims["live_web"] >= 0.58 and sims["live_web"] > sims["static_chat"] + 0.08
+        img_hit = sims["image_lookup"] >= 0.66 and sims["image_lookup"] > sims["static_chat"] + 0.14
         return web_hit, img_hit
 
 

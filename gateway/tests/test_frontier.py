@@ -72,6 +72,8 @@ def test_web_search_and_image_intent_detection():
     assert clean_image_query("an image of a server rack") == "server rack"
     assert clean_image_query("give me another sunset pic") == "sunset"
     assert needs_image_search("give me another sunset pic") is True
+    assert needs_image_search("well dear u making me falling for u like the most beloved person") is False
+    assert needs_web_search("well dear u making me falling for u like the most beloved person") is False
 
 
 def test_html_text_extractor_strips_scripts_and_tags():
