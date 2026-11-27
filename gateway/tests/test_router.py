@@ -221,3 +221,7 @@ def test_multiturn_conversational_chat_promotes_to_reasoning(monkeypatch):
     assert freq == 0.15
     assert rep == 1.12
     assert min_p == 0.05
+    assert decision.is_conversational is True
+    assert decision.max_tokens <= 220
+    steered = apply_dynamic_steering(history, decision)
+    assert "texting-style" in steered[0]["content"]

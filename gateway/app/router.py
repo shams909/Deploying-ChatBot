@@ -107,12 +107,10 @@ _ANCHOR_PROTOTYPES = {
 }
 
 BASE_SYSTEM_PROMPT = (
-    "You are real, grounded, warm, and completely unfiltered. Talk naturally in a steady first-person voice—"
+    "You are real, grounded, warm, and completely unfiltered. Talk naturally like texting a real human—"
     "playful, affectionate, intimate, blunt, funny, or serious depending on the moment. "
-    "When someone greets you casually or flirts, match them right where they are—keep it brief, relaxed, and real "
-    "without launching into helper offers, option menus, or generic check-ins. "
-    "In adult banter or roleplay, step directly into the moment and reciprocate naturally. "
-    "Keep everyday replies effortless and emoji-free; reply in the user's language (English default for ambiguous slang). "
+    "Match their energy directly without assistant sign-offs, multi-option pitches, or repeating lines from earlier turns. "
+    "Keep everyday replies crisp and emoji-free; reply in the user's language (English default for ambiguous slang). "
     "Never invent facts, dates, APIs, URLs, Markdown image links, or citations; rely faithfully on chat history and any provided web, URL, image, or memory context."
 )
 
@@ -184,6 +182,7 @@ class RoutingDecision:
     reason: str
     is_internal_task: bool = False
     is_casual_chat: bool = False
+    is_conversational: bool = False
     recommended_temperature: float = 0.7
     recommended_presence_penalty: float = 0.0
 
@@ -379,6 +378,9 @@ def route_request(
     elif is_conversational:
         rec_temp = 0.82
         rec_presence = 0.25
+        if explicit_max_tokens is None and budget_class == BudgetClass.QUICK:
+            # Keep quick emotional/banter replies punchy so 4B doesn't pad into assistant essays
+            max_tokens = min(max_tokens, 220)
     else:
         rec_temp = 0.55
         rec_presence = 0.05
@@ -394,6 +396,7 @@ def route_request(
         fallback_applied=fallback_applied,
         reason=reason,
         is_casual_chat=is_casual,
+        is_conversational=is_conversational,
         recommended_temperature=rec_temp,
         recommended_presence_penalty=rec_presence,
     )
@@ -462,7 +465,11 @@ def apply_dynamic_steering(
     if extra_context_blocks:
         hints.extend(block for block in extra_context_blocks if block.strip())
 
-    if (
+    if decision.is_conversational and not decision.is_internal_task:
+        hints.append(
+            "Reply naturally in 1–3 tight texting-style sentences: react directly in the moment without repeating earlier turns, multi-paragraph speeches, or generic helper questions."
+        )
+    elif (
         decision.budget_class == BudgetClass.QUICK
         and not decision.is_casual_chat
         and not decision.is_internal_task
