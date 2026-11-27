@@ -18,7 +18,7 @@ ExecStart=/opt/llama.cpp/build/bin/llama-server \
   --port 8082 \
   --threads 8 \
   --threads-batch 8 \
-  --ctx-size 8192 \
+  --ctx-size 4096 \
   --parallel 1 \
   --flash-attn on \
   --cache-type-k q8_0 \
