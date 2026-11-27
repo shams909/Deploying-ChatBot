@@ -206,19 +206,19 @@ def has_image_attachments(messages: list[dict[str, Any]]) -> bool:
     for msg in messages:
         content = msg.get("content")
         if isinstance(content, list):
-            if any(isinstance(p, dict) and p.get("type") == "image_url" for p in content):
+            if any(isinstance(p, dict) and p.get("type") in ("image_url", "input_image") for p in content):
                 return True
     return False
 
 
 def strip_image_attachments(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Strip image_url parts so text-only llama-server backends never return HTTP 500."""
+    """Strip image parts so text-only llama-server backends never return HTTP 500."""
     cleaned: list[dict[str, Any]] = []
     for msg in messages:
         copy = dict(msg)
         content = copy.get("content")
         if isinstance(content, list):
-            text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
+            text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") in ("text", "input_text")]
             copy["content"] = " ".join(t for t in text_parts if t).strip() or "[Image attached]"
         cleaned.append(copy)
     return cleaned

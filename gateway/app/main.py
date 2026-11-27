@@ -505,7 +505,8 @@ async def _run_tool_planning(
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]], str | None]:
     """Let Qwen3 decide tool calls (web_search/image_search) or fall back cleanly to SearXNG."""
     exclude_urls = extract_prior_image_urls(steered_messages)
-    plan_messages = [dict(m) for m in steered_messages]
+    # Tier 1 (2B) runs without mmproj, so always strip image attachments before tool planning
+    plan_messages = strip_image_attachments(steered_messages)
     tool_hint = (
         "You have live tools: web_search(query) and image_search(query). "
         "If the user asks for photos/faces/images of multiple subjects, call image_search once per subject. "
@@ -536,7 +537,7 @@ async def _run_tool_planning(
             tool_msgs, verified_images = await execute_tool_calls(
                 backend_manager.client, tool_calls, exclude_urls=exclude_urls
             )
-            updated = list(plan_messages) + [assistant_msg] + tool_msgs
+            updated = [dict(m) for m in steered_messages] + [assistant_msg] + tool_msgs
             img_instruction = (
                 "Embed verified images ONLY using exact image_url values returned by tool outputs (`![caption](url)`)."
                 if verified_images
