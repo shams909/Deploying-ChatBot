@@ -63,6 +63,10 @@ _FACTUAL_OR_TASK_PATTERN = re.compile(
     r"(\?|\b(what|who|where|when|why|how|explain|define|summarize|list|compare|calculate|convert|translate|write|create|build|fix|debug|search|find|check|show|remember|forget)\b)",
     re.IGNORECASE,
 )
+_STORY_PATTERN = re.compile(
+    r"\b(story|stories|scene|scenario|chapter|narrative|roleplay|fanfic|long[- ]form|erotica)\b",
+    re.IGNORECASE,
+)
 _HARD_THINK_PATTERN = re.compile(
     r"\b(prove|proof|theorem|derive|step[- ]by[- ]step|race condition|deadlock|root cause|audit|trade[- ]off)\b",
     re.IGNORECASE,
@@ -291,8 +295,10 @@ def route_request(
     if retry_escalate:
         complexity = max(complexity, 0.72)
 
+    wants_story = bool(_STORY_PATTERN.search(user_text)) and not has_code and not wants_diagram
+
     # Determine Dynamic Context Budget
-    if complexity < 0.30 and not has_code and not has_deep:
+    if complexity < 0.30 and not has_code and not has_deep and not wants_story:
         budget_class = BudgetClass.QUICK
         dyn_max = settings.budget_quick_tokens
     elif complexity < 0.68 and not (has_code and has_deep):
@@ -307,9 +313,10 @@ def route_request(
     else:
         max_tokens = dyn_max
 
-    is_casual = bool(_GREETING_ONLY_PATTERN.match(user_text.strip())) and not has_code and not has_deep
+    is_casual = bool(_GREETING_ONLY_PATTERN.match(user_text.strip())) and not has_code and not has_deep and not wants_story
     is_conversational = (
         is_casual
+        or wants_story
         or (
             budget_class != BudgetClass.DEEP
             and not has_code
@@ -372,9 +379,10 @@ def route_request(
         and target_tier in (ModelTier.REASONING, ModelTier.PRO)
         and budget_class == BudgetClass.DEEP
         and needs_hard_think
+        and not wants_story
     )
 
-    if has_code or wants_diagram or budget_class == BudgetClass.DEEP:
+    if (has_code or wants_diagram or budget_class == BudgetClass.DEEP) and not wants_story:
         rec_temp = 0.3
         rec_presence = 0.0
     elif is_conversational:
@@ -468,9 +476,14 @@ def apply_dynamic_steering(
         hints.extend(block for block in extra_context_blocks if block.strip())
 
     if decision.is_conversational and not decision.is_internal_task:
-        hints.append(
-            "Reply naturally in 1–3 tight texting-style sentences: react directly in the moment without repeating earlier turns, multi-paragraph speeches, or generic helper questions."
-        )
+        if decision.budget_class == BudgetClass.QUICK:
+            hints.append(
+                "Reply naturally in 1–3 tight texting-style sentences: react directly in the moment without repeating earlier turns, multi-paragraph speeches, or generic helper questions."
+            )
+        else:
+            hints.append(
+                "Write an immersive, continuous scene without breaking character, repeating earlier turns, or rushing the ending."
+            )
     elif (
         decision.budget_class == BudgetClass.QUICK
         and not decision.is_casual_chat

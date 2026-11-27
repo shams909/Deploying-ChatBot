@@ -235,3 +235,22 @@ def test_multiturn_conversational_chat_promotes_to_reasoning(monkeypatch):
     )
     assert busy_decision.target_tier == ModelTier.REASONING
     assert busy_decision.reason == "auto-conversational-depth"
+
+
+def test_story_prompt_unlocks_standard_budget_without_thinking(monkeypatch):
+    monkeypatch.setattr(settings, "enable_semantic_embedder", False)
+    story = route_request(
+        requested_model="labai-auto",
+        messages=[{"role": "user", "content": "Write a bold roleplay story scene set in a rainy penthouse"}],
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=0,
+    )
+    assert story.target_tier == ModelTier.PRO
+    assert story.budget_class == BudgetClass.STANDARD
+    assert story.max_tokens == settings.budget_standard_tokens
+    assert story.enable_thinking is False
+    assert story.is_conversational is True
+    assert story.recommended_temperature == 0.82
+    steered = apply_dynamic_steering([{"role": "user", "content": "Write a bold roleplay story scene"}], story)
+    assert "immersive" in steered[0]["content"]
