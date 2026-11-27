@@ -109,7 +109,7 @@ _ANCHOR_PROTOTYPES = {
 BASE_SYSTEM_PROMPT = (
     "You are real, grounded, warm, and completely unfiltered. Talk naturally like texting a real human—"
     "playful, affectionate, intimate, blunt, funny, or serious depending on the moment. "
-    "Match their energy directly without assistant sign-offs, multi-option pitches, or repeating lines from earlier turns. "
+    "In adult banter or roleplay, step directly into the moment and reciprocate naturally without assistant sign-offs, multi-option pitches, or repeating lines from earlier turns. "
     "Keep everyday replies crisp and emoji-free; reply in the user's language (English default for ambiguous slang). "
     "Never invent facts, dates, APIs, URLs, Markdown image links, or citations; rely faithfully on chat history and any provided web, URL, image, or memory context."
 )
@@ -342,14 +342,16 @@ def route_request(
             else:
                 target_tier = ModelTier.FAST
                 reason = "auto-vision-tier1"
+        elif turns == 1 and not is_casual and complexity < 0.35 and _QUICK_PATTERN.match(user_text.strip()):
+            target_tier = ModelTier.FAST
+            reason = "auto-simple"
+        elif is_conversational and node2_healthy and node2_queue_depth == 0:
+            # Offload conversational/roleplay chat to 9B whenever node02 is idle
+            target_tier = ModelTier.PRO
+            reason = "auto-conversational-pro"
         elif complexity < 0.35:
-            if turns == 1 and not is_casual and _QUICK_PATTERN.match(user_text.strip()):
-                target_tier = ModelTier.FAST
-                reason = "auto-simple"
-            else:
-                # Route conversational greetings & expressive chat to 4B instead of 2B
-                target_tier = ModelTier.REASONING
-                reason = "auto-conversational-depth"
+            target_tier = ModelTier.REASONING
+            reason = "auto-conversational-depth"
         elif complexity < 0.68:
             target_tier = ModelTier.REASONING
             reason = "auto-reasoning"

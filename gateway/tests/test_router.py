@@ -213,8 +213,8 @@ def test_multiturn_conversational_chat_promotes_to_reasoning(monkeypatch):
         node2_healthy=True,
         node2_queue_depth=0,
     )
-    assert decision.target_tier == ModelTier.REASONING
-    assert decision.reason == "auto-conversational-depth"
+    assert decision.target_tier == ModelTier.PRO
+    assert decision.reason == "auto-conversational-pro"
     assert decision.recommended_temperature == 0.82
     assert decision.recommended_presence_penalty == 0.25
     freq, rep, min_p = resolve_repetition_params(decision, is_grounded=False)
@@ -225,3 +225,13 @@ def test_multiturn_conversational_chat_promotes_to_reasoning(monkeypatch):
     assert decision.max_tokens <= 220
     steered = apply_dynamic_steering(history, decision)
     assert "texting-style" in steered[0]["content"]
+
+    busy_decision = route_request(
+        requested_model="labai-auto",
+        messages=history,
+        explicit_max_tokens=None,
+        node2_healthy=True,
+        node2_queue_depth=1,
+    )
+    assert busy_decision.target_tier == ModelTier.REASONING
+    assert busy_decision.reason == "auto-conversational-depth"
