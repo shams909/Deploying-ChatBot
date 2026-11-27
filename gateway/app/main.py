@@ -373,8 +373,8 @@ async def chat_completions(
     if supports_thinking(decision.target_tier):
         upstream_payload["chat_template_kwargs"] = {"enable_thinking": decision.enable_thinking}
     if decision.is_conversational and not is_grounded_final:
-        # Extend llama.cpp's 64-token default lookback so the model cannot copy the prior reply verbatim
-        upstream_payload["repeat_last_n"] = 256
+        # 128-token lookback blocks turn copying without penalizing normal pronouns like 'I'/'I'm' across 256 tokens
+        upstream_payload["repeat_last_n"] = 128
 
     save_memories = not decision.is_internal_task and not decision.is_casual_chat and not temp_mode
 

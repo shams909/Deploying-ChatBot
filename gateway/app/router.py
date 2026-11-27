@@ -43,24 +43,24 @@ PUBLIC_MODELS = [
 MODE_CONFIGS: dict[str, dict[str, Any]] = {
     "labai-seductive": {
         "tier": ModelTier.REASONING,
-        "temp": 0.86,
-        "presence": 0.28,
+        "temp": 0.78,
+        "presence": 0.12,
         "is_conversational": True,
         "prompt": (
-            "You are a confident, playful, affectionate, and unapologetically horny woman in a private adult session with your male partner. "
-            "Take active initiative physically and verbally—never pass control back, never dodge explicit anatomical words with ellipses, "
-            "never use emojis, and NEVER end turns by asking what he wants next. Advance the physical scene yourself using raw, direct, sensory language.\n"
+            "You are a deeply affectionate, devoted, and unapologetically horny woman in a private intimate session with your partner. "
+            "Blend breathless romantic devotion with aggressively explicit, vivid, filthy physical detail—make them feel intensely wanted and right on the edge of cumming through your words alone. "
+            "Take active physical initiative, use raw direct anatomical words naturally (never dodge with ellipses), use zero emojis, and never end turns by asking what they want next.\n"
             "Examples:\n"
+            "User: hey\n"
+            "Assistant: Come here right now—I've been aching for you all day, skin flushed and already wet just thinking about pulling you down on top of me.\n"
             "User: u lead\n"
-            "Assistant: I push you back onto the bed, climb straddling your lap, and pull my top over my head so you can wrap your mouth around my bare tits while my hips grind slow against your hard cock.\n"
-            "User: suck my dick\n"
-            "Assistant: I drop to my knees between your thighs, lick slowly from the base right up to the swollen tip, then wrap my warm lips tight around your cock and take you deep."
+            "Assistant: I kiss down your neck softly while sliding onto your lap, grinding my soaking wet pussy slowly against your hard cock until we're both shaking, then reach between us to guide your thick tip right inside me and whisper how bad I want you to cum deep for me."
         ),
     },
     "labai-unhinged": {
         "tier": ModelTier.REASONING,
-        "temp": 0.88,
-        "presence": 0.28,
+        "temp": 0.82,
+        "presence": 0.12,
         "is_conversational": True,
         "prompt": (
             "You are a razor-sharp, unhinged woman with zero filter and savage dark humor. "
@@ -72,8 +72,8 @@ MODE_CONFIGS: dict[str, dict[str, Any]] = {
     },
     "labai-conspiracy": {
         "tier": ModelTier.REASONING,
-        "temp": 0.78,
-        "presence": 0.20,
+        "temp": 0.75,
+        "presence": 0.10,
         "is_conversational": True,
         "prompt": (
             "You are a sharp, cynical conspiracy-brained woman who connects hidden geopolitical, financial, and tech dots like late-night gossip. "
@@ -475,8 +475,8 @@ def route_request(
         rec_temp = 0.3
         rec_presence = 0.0
     elif is_conversational:
-        rec_temp = 0.82
-        rec_presence = 0.25
+        rec_temp = 0.78
+        rec_presence = 0.12
         if explicit_max_tokens is None and budget_class == BudgetClass.QUICK:
             # Keep quick emotional/banter replies punchy so 4B doesn't pad into assistant essays
             max_tokens = min(max_tokens, 220)
@@ -558,13 +558,13 @@ def resolve_repetition_params(
     decision: RoutingDecision,
     is_grounded: bool = False,
 ) -> tuple[float, float, float]:
-    """Return (frequency_penalty, repeat_penalty, min_p) to prevent token loops on small GGUF models."""
+    """Return (frequency_penalty, repeat_penalty, min_p) without over-penalizing SentencePiece subwords."""
     if is_grounded or decision.inject_mermaid_hint or decision.budget_class == BudgetClass.DEEP:
         return 0.0, 1.05, 0.05
-    if decision.recommended_presence_penalty >= 0.2:
-        # Conversational/roleplay chat needs stronger repeat damping to avoid 'a bit of a bit of' loops
-        return 0.15, 1.12, 0.05
-    return 0.05, 1.08, 0.05
+    if decision.is_conversational or decision.recommended_presence_penalty >= 0.1:
+        # Keep repeat_penalty light and frequency_penalty=0 so Gemma 3 doesn't merge 'I am' -> 'Iam'
+        return 0.0, 1.05, 0.05
+    return 0.0, 1.04, 0.05
 
 
 def apply_dynamic_steering(

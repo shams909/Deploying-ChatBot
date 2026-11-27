@@ -165,8 +165,8 @@ def test_dynamic_sampling_casual_and_grounded_prompts(monkeypatch):
             node2_queue_depth=0,
         )
         temp, penalty = resolve_sampling_params(0.7, None, casual, is_grounded=False)
-        assert temp == 0.82
-        assert penalty == 0.25
+        assert temp == 0.78
+        assert penalty == 0.12
 
     factual = route_request(
         requested_model="labai-auto",
@@ -215,11 +215,11 @@ def test_multiturn_conversational_chat_promotes_to_reasoning(monkeypatch):
     )
     assert decision.target_tier == ModelTier.REASONING
     assert decision.reason == "auto-conversational-gemma"
-    assert decision.recommended_temperature == 0.82
-    assert decision.recommended_presence_penalty == 0.25
+    assert decision.recommended_temperature == 0.78
+    assert decision.recommended_presence_penalty == 0.12
     freq, rep, min_p = resolve_repetition_params(decision, is_grounded=False)
-    assert freq == 0.15
-    assert rep == 1.12
+    assert freq == 0.0
+    assert rep == 1.05
     assert min_p == 0.05
     assert decision.is_conversational is True
     assert decision.max_tokens <= 220
@@ -251,7 +251,7 @@ def test_story_prompt_unlocks_standard_budget_without_thinking(monkeypatch):
     assert story.max_tokens == settings.budget_standard_tokens
     assert story.enable_thinking is False
     assert story.is_conversational is True
-    assert story.recommended_temperature == 0.82
+    assert story.recommended_temperature == 0.78
     steered = apply_dynamic_steering([{"role": "user", "content": "Write a bold roleplay story scene"}], story)
     assert "immersive" in steered[0]["content"]
 
@@ -267,7 +267,7 @@ def test_grok_modes_route_and_steer_cleanly(monkeypatch):
     )
     assert seductive.target_tier == ModelTier.REASONING
     assert seductive.reason == "mode-labai-seductive"
-    assert seductive.recommended_temperature == 0.86
+    assert seductive.recommended_temperature == 0.78
     assert seductive.enable_thinking is False
     steered = apply_dynamic_steering([{"role": "user", "content": "miss u tonight"}], seductive)
     assert "horny woman" in steered[0]["content"]
