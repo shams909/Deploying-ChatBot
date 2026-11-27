@@ -358,9 +358,9 @@ async def chat_completions(
         repeat_penalty = float(_mode_cfg["repeat_penalty"])
 
     payload_messages = (
-        trim_messages_for_ctx(steered_messages)
+        trim_messages_for_ctx(steered_messages, max_chars=9500)
         if decision.target_tier != ModelTier.PRO
-        else steered_messages
+        else trim_messages_for_ctx(steered_messages, max_chars=24000)
     )
 
     upstream_payload = {
@@ -380,6 +380,11 @@ async def chat_completions(
     if decision.is_conversational and not is_grounded_final:
         # 128-token lookback blocks turn copying without penalizing normal pronouns like 'I'/'I'm' across 256 tokens
         upstream_payload["repeat_last_n"] = 128
+        # DRY (Don't Repeat Yourself) penalizes repeating multi-word phrases without breaking single tokens
+        upstream_payload["dry_multiplier"] = 0.8
+        upstream_payload["dry_base"] = 1.75
+        upstream_payload["dry_allowed_length"] = 2
+        upstream_payload["dry_penalty_last_n"] = 512
 
     save_memories = not decision.is_internal_task and not decision.is_casual_chat and not temp_mode
 
